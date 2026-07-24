@@ -4,6 +4,7 @@ import { DefinitionProvider } from './definition'
 import { FoldingProvider, DoctexFoldingProvider, WeaveFoldingProvider } from './folding'
 import { SelectionRangeProvider } from './selection'
 import { getLocaleString } from './l10n'
+import { DocColorProvider } from './color'
 
 export const language = {
     docSymbol: new DocSymbolProvider(),
@@ -13,5 +14,6 @@ export const language = {
     doctexFolding: new DoctexFoldingProvider(),
     weaveFolding: new WeaveFoldingProvider(),
     selectionRage: new SelectionRangeProvider(),
+    docColor: new DocColorProvider(),
     getLocaleString
 }
