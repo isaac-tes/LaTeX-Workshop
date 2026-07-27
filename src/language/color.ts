@@ -93,7 +93,7 @@ export class DocColorProvider implements vscode.DocumentColorProvider {
 
         // type match?
         // text as parameter?
-        let handlers = [
+        const handlers = [
             { 'func': colorParserHTML, 'regex': /(\\definecolor\{(HTML)\}\{)([^}]+)/g },
             { 'func': colorParserGray, 'regex': /(\\definecolor\{(gray)\}\{)([^}]+)/g },
             { 'func': colorParserRGB, 'regex': /(\\definecolor\{(rgb)\}\{)([^}]+)/g },
@@ -105,7 +105,7 @@ export class DocColorProvider implements vscode.DocumentColorProvider {
         return colors
     }
 
-    provideColorPresentations(color: vscode.Color, context: { document: vscode.TextDocument; range: vscode.Range }): vscode.ProviderResult<vscode.ColorPresentation[]> {
+    provideColorPresentations(color: vscode.Color, context: { document: vscode.TextDocument, range: vscode.Range }): vscode.ProviderResult<vscode.ColorPresentation[]> {
         const precision = 2
         const line = context.document.lineAt(context.range.start.line).text
         let label = ''
@@ -121,14 +121,16 @@ export class DocColorProvider implements vscode.DocumentColorProvider {
         }
 
         switch (type) {
-            case 'HTML':
+            case 'HTML': {
                 const toHex = (value: number) => Math.round(value * 255).toString(16).padStart(2, '0')
                 label = `${toHex(color.red)}${toHex(color.green)}${toHex(color.blue)}`
                 break
-            case 'rgb':
+            }
+            case 'rgb': {
                 label = `${color.red.toFixed(precision)},${color.green.toFixed(precision)},${color.blue.toFixed(precision)}`
                 break
-            case 'cmyk':
+            }
+            case 'cmyk': {
                 const r = color.red
                 const g = color.green
                 const b = color.blue
@@ -138,16 +140,17 @@ export class DocColorProvider implements vscode.DocumentColorProvider {
                 const y = (1 - b - k) * (1 - k)
                 label = `${c.toFixed(precision)},${m.toFixed(precision)},${y.toFixed(precision)},${k.toFixed(precision)}`
                 break
-            case 'gray':
-                let gray = (color.red + color.green + color.blue) / 3
+            }
+            case 'gray': {
+                const gray = (color.red + color.green + color.blue) / 3
                 label = `${gray.toFixed(precision)}`
                 break
+            }
             default:
                 return
         }
 
         label = `{${type}}{${label}`
-
         return [new vscode.ColorPresentation(label)]
     }
 }
