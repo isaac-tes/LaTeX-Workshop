@@ -14,7 +14,6 @@ function colorParserCMYK(colorAsString: string): vscode.Color | undefined {
     const r = (1 - c) * (1 - k)
     const g = (1 - m) * (1 - k)
     const b = (1 - y) * (1 - k)
-
     return new vscode.Color(r, g, b, 1)
 }
 
@@ -36,12 +35,17 @@ function colorParserRGB(colorAsString: string): vscode.Color | undefined {
     const r = parseFloat(tokens[0])
     const g = parseFloat(tokens[1])
     const b = parseFloat(tokens[2])
-
     return new vscode.Color(r, g, b, 1)
 }
 
 function colorParserGray(colorAsString: string): vscode.Color | undefined{
+    if (!colorAsString.match(/^[0-9.]*$/)) {
+        return undefined
+    }
     const gray = parseFloat(colorAsString)
+    if (gray < 0 || gray > 1) {
+        return undefined
+    }
     return new vscode.Color(gray, gray, gray, 1)
 }
 
