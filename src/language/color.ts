@@ -116,10 +116,18 @@ export class DocColorProvider implements vscode.DocumentColorProvider {
                 const g = color.green
                 const b = color.blue
                 const k = 1 - Math.max(r, g, b)
-                const c = (1 - r - k) / (1 - k)
-                const m = (1 - g - k) * (1 - k)
-                const y = (1 - b - k) * (1 - k)
-                label = `${c.toFixed(precision)},${m.toFixed(precision)},${y.toFixed(precision)},${k.toFixed(precision)}`
+                if (k === 1) {
+                    const c = 0.
+                    const m = 0.
+                    const y = 0.
+                    label = `${c.toFixed(precision)},${m.toFixed(precision)},${y.toFixed(precision)},${k.toFixed(precision)}`
+
+                } else {
+                    const c = (1 - r - k) / (1 - k)
+                    const m = (1 - g - k) / (1 - k)
+                    const y = (1 - b - k) / (1 - k)
+                    label = `${c.toFixed(precision)},${m.toFixed(precision)},${y.toFixed(precision)},${k.toFixed(precision)}`
+                }
                 break
             }
             case 'gray': {
