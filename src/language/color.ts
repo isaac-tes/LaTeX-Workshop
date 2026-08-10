@@ -93,7 +93,7 @@ export class DocColorProvider implements vscode.DocumentColorProvider {
     provideColorPresentations(color: vscode.Color, context: { document: vscode.TextDocument, range: vscode.Range }): vscode.ProviderResult<vscode.ColorPresentation[]> {
         const precision = 2
         const line = context.document.lineAt(context.range.start.line).text
-        let label: string | undefined = undefined
+        let label: string | undefined
 
         const regex = /\\definecolor\{\w+\}\{([a-zA-Z]+)\}/g
         const match = regex.exec(line)
@@ -128,6 +128,7 @@ export class DocColorProvider implements vscode.DocumentColorProvider {
                 break
             }
             default:
+                label = undefined
                 return
         }
 
