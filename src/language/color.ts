@@ -93,20 +93,16 @@ export class DocColorProvider implements vscode.DocumentColorProvider {
     provideColorPresentations(color: vscode.Color, context: { document: vscode.TextDocument, range: vscode.Range }): vscode.ProviderResult<vscode.ColorPresentation[]> {
         const precision = 2
         const line = context.document.lineAt(context.range.start.line).text
-        let label = ''
-        let type = 'UNKNOWN'
+        let label: string | undefined = undefined
 
         const regex = /\\definecolor\{\w+\}\{([a-zA-Z]+)\}/g
         const match = regex.exec(line)
-        if (match) {
-            type = match[1].toLowerCase()
-        }
-        else {
+        if (match === null) {
             return
         }
-
+        const type = match[1].toLowerCase()
         switch (type) {
-            case 'HTML': {
+            case 'html': {
                 const toHex = (value: number) => Math.round(value * 255).toString(16).padStart(2, '0')
                 label = `${toHex(color.red)}${toHex(color.green)}${toHex(color.blue)}`
                 break
@@ -135,6 +131,9 @@ export class DocColorProvider implements vscode.DocumentColorProvider {
                 return
         }
 
-        return [new vscode.ColorPresentation(label)]
+        if (label !== undefined) {
+            return [new vscode.ColorPresentation(label)]
+        }
+        return []
     }
 }
