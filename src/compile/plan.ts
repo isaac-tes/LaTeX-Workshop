@@ -75,8 +75,7 @@ export class Plan {
             return
         }
 
-        // Preserve the legacy clone semantics, including omission of undefined object properties.
-        const copiedTools = JSON.parse(JSON.stringify(tools)) as Tool[]
+        const copiedTools = structuredClone(tools)
         Plan.populateTools(copiedTools, recipe, configuration)
         return new Plan(recipe, copiedTools)
     }
@@ -237,10 +236,12 @@ export class Plan {
     }
 
     private canRetry(step: Step, result: StepResult): boolean {
-        // Keep fatal spawn/child-process errors on the legacy no-retry path.
+        // Fatal spawn/child-process errors won't be retried.
         if (result.error !== undefined) {
             return false
         }
+        // Only retry if the step failed, is not external, was not terminated by
+        // the user, and has not already been retried.
         if (result.status !== 'failed' || step.isExternal || result.signal === 'SIGTERM' || step.isRetry) {
             return false
         }
@@ -260,7 +261,6 @@ export class Plan {
         logger.log('Cleaning auxiliary files and retrying build after toolchain error.')
         try {
             await lw.extra.clean(step.rootFile)
-            lw.event.fire(lw.event.AutoCleaned)
         } catch (error) {
             logger.logError('Failed to clean auxiliary files before retrying.', error)
         }

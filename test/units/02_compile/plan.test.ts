@@ -42,7 +42,6 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     let chmodStub: sinon.SinonStub
     let setTeXDirsStub: sinon.SinonStub
     let cleanStub: sinon.SinonStub
-    let fireStub: sinon.SinonStub
     let platform: PropertyDescriptor | undefined
     let extensionRoot: string
 
@@ -56,7 +55,6 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         chmodStub = sinon.stub(lw.external, 'chmodSync')
         setTeXDirsStub = sinon.stub(lw.file, 'setTeXDirs')
         cleanStub = lw.extra.clean as sinon.SinonStub
-        fireStub = lw.event.fire as sinon.SinonStub
         platform = Object.getOwnPropertyDescriptor(process, 'platform')
         extensionRoot = lw.extensionRoot
     })
@@ -69,7 +67,6 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         setTeXDirsStub.reset()
         cleanStub.reset()
         cleanStub.resolves()
-        fireStub.reset()
         set.config('latex.tools', [])
         set.config('docker.enabled', false)
         set.config('latex.option.maxPrintLine.enabled', false)
@@ -125,7 +122,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 command: 'command',
                 args: ['%DOC%'],
                 cwd: '%DIR%/build',
-                env: {DOCUMENT: '%DOC%', OMITTED: undefined}
+                env: {DOCUMENT: '%DOC%', PRESERVED: undefined}
             }
             set.config('latex.tools', [configured])
 
@@ -136,11 +133,11 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 command: 'command',
                 args: ['%DOC%'],
                 cwd: '%DIR%/build',
-                env: {DOCUMENT: '%DOC%', OMITTED: undefined}
+                env: {DOCUMENT: '%DOC%', PRESERVED: undefined}
             })
             assert.notStrictEqual(plan.steps[0].args, configured.args)
             assert.notStrictEqual(plan.steps[0].env, configured.env)
-            assert.ok(!Object.prototype.hasOwnProperty.call(plan.steps[0].env ?? {}, 'OMITTED'))
+            assert.ok(Object.prototype.hasOwnProperty.call(plan.steps[0].env ?? {}, 'PRESERVED'))
         })
 
         it('stores plan fields and creates ordered steps with total count', () => {
@@ -534,7 +531,6 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.strictEqual(plan.steps[0].isRetry, true)
             assert.ok(run.calledTwice)
             assert.ok(cleanStub.calledOnceWithExactly(rootFile))
-            assert.ok(fireStub.calledOnceWithExactly(lw.event.AutoCleaned))
         })
 
         it('retries an internal plan without a root file', async () => {
@@ -588,7 +584,6 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             assert.strictEqual(outcome.status, 'succeeded')
             assert.ok(run.calledTwice)
-            assert.ok(fireStub.notCalled)
             assert.hasLog('Failed to clean auxiliary files before retrying.')
         })
 
