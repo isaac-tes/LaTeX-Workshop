@@ -454,6 +454,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             lw.cache.add(toParse)
             await lw.cache.refreshCache(toParse)
+            await lw.cache.wait(texPath, 60)
             assert.ok(lw.watcher.src.has(vscode.Uri.file(texPath)))
         })
 
@@ -464,6 +465,10 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             lw.cache.add(toParse)
             await lw.cache.refreshCache(toParse)
+            await Promise.all([
+                lw.cache.wait(texPath, 60),
+                lw.cache.wait(texPathAnother, 60),
+            ])
             assert.listStrictEqual(
                 lw.cache.get(toParse)?.children.map((child) => child.filePath),
                 [texPath, texPathAnother]
@@ -476,6 +481,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             lw.cache.add(toParse)
             await lw.cache.refreshCache(toParse)
+            await lw.cache.wait(texPath, 60)
             assert.listStrictEqual(
                 lw.cache.get(toParse)?.children.map((child) => child.filePath),
                 [texPath]
@@ -524,6 +530,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const toParse = get.path(fixture, 'update_children_xr', 'input_main.tex')
             lw.cache.add(toParse)
             await lw.cache.refreshCache(toParse)
+            await lw.cache.wait(texPath, 60)
 
             let fileCache = lw.cache.get(texPathAnother)
             assert.ok(fileCache)
@@ -540,6 +547,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             lw.cache.add(toParse)
             await lw.cache.refreshCache(toParse)
+            await lw.cache.wait(texPath, 60)
             const fileCache = lw.cache.get(toParse)
             assert.ok(fileCache)
             assert.listStrictEqual(Object.keys(fileCache.external), [texPath])
@@ -547,6 +555,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
         it('should add a child if it is next to the root', async () => {
             const rootPath = get.path(fixture, 'update_children_xr', 'sub', 'main.tex')
+            const externalPath = get.path(fixture, 'update_children_xr', 'sub', 'sub.tex')
             set.root(rootPath)
             lw.cache.add(rootPath)
             await lw.cache.refreshCache(rootPath)
@@ -554,16 +563,16 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const toParse = get.path(fixture, 'update_children_xr', 'input_sub.tex')
             lw.cache.add(toParse)
             await lw.cache.refreshCache(toParse)
+            await lw.cache.wait(externalPath, 60)
 
             const fileCache = lw.cache.get(rootPath)
             assert.ok(fileCache)
-            assert.listStrictEqual(Object.keys(fileCache.external), [
-                get.path(fixture, 'update_children_xr', 'sub', 'sub.tex'),
-            ])
+            assert.listStrictEqual(Object.keys(fileCache.external), [externalPath])
         })
 
         it('should add a child if it is defined in `latex.texDirs`', async () => {
             const texPath = get.path(fixture, 'main.tex')
+            const externalPath = get.path(fixture, 'update_children_xr', 'sub', 'sub.tex')
 
             set.config('latex.texDirs', [get.path(fixture, 'update_children_xr', 'sub')])
 
@@ -574,12 +583,11 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const toParse = get.path(fixture, 'update_children_xr', 'input_sub.tex')
             lw.cache.add(toParse)
             await lw.cache.refreshCache(toParse)
+            await lw.cache.wait(externalPath, 60)
 
             const fileCache = lw.cache.get(texPath)
             assert.ok(fileCache)
-            assert.listStrictEqual(Object.keys(fileCache.external), [
-                get.path(fixture, 'update_children_xr', 'sub', 'sub.tex'),
-            ])
+            assert.listStrictEqual(Object.keys(fileCache.external), [externalPath])
         })
 
         it('should add a child and cache it if not cached', async () => {
@@ -600,6 +608,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             lw.cache.add(toParse)
             await lw.cache.refreshCache(toParse)
+            await lw.cache.wait(texPath, 60)
             assert.ok(lw.watcher.src.has(vscode.Uri.file(texPath)))
         })
 
@@ -609,6 +618,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             lw.cache.add(toParse)
             await lw.cache.refreshCache(toParse)
+            await lw.cache.wait(texPath, 60)
             const fileCache = lw.cache.get(toParse)
             assert.ok(fileCache)
             assert.strictEqual(fileCache.external[texPath], 'prefix')
