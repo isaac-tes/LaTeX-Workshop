@@ -273,7 +273,8 @@ function registerProviders(extensionContext: vscode.ExtensionContext) {
         vscode.languages.registerDocumentSymbolProvider(latexSymbolSelector, lw.language.docSymbol),
         vscode.languages.registerDocumentSymbolProvider(bibtexSelector, lw.language.docSymbol),
         vscode.languages.registerDocumentSymbolProvider(selectDocumentsWithId(['doctex']), lw.language.docSymbol),
-        vscode.languages.registerWorkspaceSymbolProvider(lw.language.projectSymbol)
+        vscode.languages.registerWorkspaceSymbolProvider(lw.language.projectSymbol),
+        vscode.languages.registerColorProvider(latexSymbolSelector, lw.language.docColor)
     )
 
     extensionContext.subscriptions.push(
