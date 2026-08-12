@@ -51,6 +51,11 @@ export class Executor {
         lw.onConfigChange('docker.path', () => this.setDockerPath())
     }
 
+    /**
+     * Prepares and queues a build request in request order.
+     * The first caller owns draining; only successful current-generation plans
+     * become pending, while later callers enqueue and repair an idle handoff.
+     */
     async run(request: {
         recipeName?: string,
         isAuto: boolean,
@@ -113,6 +118,11 @@ export class Executor {
         process.env['LATEXWORKSHOP_DOCKER_PATH'] = dockerPath
     }
 
+    /**
+     * Resolves the editor target, saves documents, and creates a Plan.
+     * External builds take priority but cannot overlap; internal builds require
+     * a valid root/language and may prompt for a manual root or be cancelled.
+     */
     private async preparePlan(request: {
         recipeName?: string,
         isAuto: boolean,
@@ -158,6 +168,11 @@ export class Executor {
         return recipe && Plan.create(recipe)
     }
 
+    /**
+     * Selects the root and language for an automatic or manual build.
+     * Auto builds reuse known state and may choose a subfile unless Bib changed;
+     * manual builds reject non-LaTeX editors and run root discovery.
+     */
     private async findBuildTarget(
         request: {isAuto: boolean, isBibChanged: boolean},
         activeEditor: vscode.TextEditor
@@ -184,6 +199,11 @@ export class Executor {
         return {rootFile, languageId}
     }
 
+    /**
+     * Runs eligible pending Plans serially, preferring the latest request.
+     * It waits for relevant preparations before switching or idling, advances
+     * generations on failure, and always restores counters and drain ownership.
+     */
     private async drain(): Promise<void> {
         let started = false
         try {
@@ -334,6 +354,11 @@ export class Executor {
         }
     }
 
+    /**
+     * Reports a failed Plan according to its result and origin.
+     * Termination only resets status, process errors were already reported,
+     * external failures get their own message, and internal failures may clean.
+     */
     private async handleFailedPlan(plan: Plan, result: PlanResult) {
         if (result.status === 'terminated') {
             logger.refreshStatus('x', 'errorForeground')
@@ -365,6 +390,11 @@ export class Executor {
         void logger.showErrorMessageWithCompilerLogButton('Recipe terminated with error.')
     }
 
+    /**
+     * Publishes success and refreshes artifacts for a completed Plan.
+     * Rootless external builds only refresh; skipped internal builds stop after
+     * BuildDone, while other builds update PDF data, SyncTeX, and optional clean.
+     */
     private async afterSuccessfulBuild(plan: Plan, result: PlanResult) {
         // This only happens when the step is an external command.
         if (plan.rootFile === undefined) {

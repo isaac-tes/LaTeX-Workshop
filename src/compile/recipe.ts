@@ -39,6 +39,11 @@ export class Recipe {
         Recipe.lastLanguageId = ''
     }
 
+    /**
+     * Creates an internal Recipe from magic comments or configured recipes.
+     * With magic enabled and no explicit name, TeX magic builds take priority
+     * and LW magic selects a config; only resolved config recipes become last-used.
+     */
     static async create(
         rootFile: string,
         languageId: string,
@@ -174,6 +179,11 @@ export class Recipe {
         return [texTool, bibTool, texTool, texTool]
     }
 
+    /**
+     * Resolves a configured recipe by explicit/default name, last-used name,
+     * then the first language-compatible fallback. Language changes clear
+     * last-used state, while empty or unmatched candidate sets report an error.
+     */
     private static findConfig(
         configuration: vscode.WorkspaceConfiguration,
         languageId: string,

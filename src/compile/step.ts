@@ -88,6 +88,11 @@ export class Step {
         }
     }
 
+    /**
+     * Terminates the active process and its children when present.
+     * Child processes are killed with the platform tool on Unix and Windows,
+     * then the direct process kill is always attempted; the first error wins.
+     */
     terminate(): Error | undefined {
         if (this.process === undefined) {
             logger.log('LaTeX build process to kill is not found.')
@@ -151,6 +156,11 @@ export class Step {
         return {...process.env, ...this.env, max_print_line: MAX_PRINT_LINE}
     }
 
+    /**
+     * Resolves the command, arguments, and spawn options for this Step.
+     * Magic-comment options use a flattened shell command; otherwise BibTeX
+     * arguments are normalized, and only internal Steps receive the built env.
+     */
     private resolveProcessInvocation(env: NodeJS.ProcessEnv): {
         command: string,
         args: string[],
@@ -161,6 +171,8 @@ export class Step {
             this.name.startsWith(TEX_MAGIC_PROGRAM_NAME) ||
             this.name.startsWith(BIB_MAGIC_PROGRAM_NAME)
         )
+        // All optional arguments are given as a unique string (% !TeX options)
+        // if any, so we use {shell: true}
         const hasMagicOptions = isMagic && this.args !== undefined && !this.name.endsWith(MAGIC_PROGRAM_ARGS_SUFFIX)
 
         if (this.command === 'bibtex' && args.length > 0 && !hasMagicOptions) {
@@ -248,6 +260,10 @@ export class Step {
 
     private parseLatexLogs(stdout: string, stderr: string): {skipped: boolean, backend: string} {
         let skipped = false
+        // #4838 LaTeX writes messages to stdout, while dvipdfmx writes messages
+        // to stderr, so both output streams need to be parsed. Both stdout and
+        // stderr are parsed every time, but only when they contain
+        // non-whitespace content.
         if (stderr.trim().length > 0) {
             skipped = lw.parser.parse.log(stderr, this.rootFile) || skipped
         }
@@ -307,8 +323,8 @@ export class Step {
             return argument
         }
 
-        // https://github.com/James-Yu/LaTeX-Workshop/pull/4714
-        // Use a relative path inside cwd to satisfy TeX distribution output-path restrictions.
+        // #4714 Use a relative path inside cwd to satisfy TeX distribution
+        // output-path restrictions.
         const relativePath = path.relative(this.cwd, absolutePath)
         const isInsideCwd = relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath))
         if (!isInsideCwd) {

@@ -174,6 +174,11 @@ export class Plan {
         lw.file.setTeXDirs(rootFile, outDir, auxDir)
     }
 
+    /**
+     * Adds MiKTeX's max-print-line option to compatible pdfLaTeX tools.
+     * Disabled, non-MiKTeX, and non-pdfLaTeX paths are unchanged; magic
+     * options are kept as one quoted shell string while regular args prepend it.
+     */
     private static configureMaxPrintLine(tool: Tool, configuration: vscode.WorkspaceConfiguration) {
         if (!configuration.get('latex.option.maxPrintLine.enabled')) {
             return
@@ -188,6 +193,9 @@ export class Plan {
         }
 
         if (tool.name === TEX_MAGIC_PROGRAM_NAME) {
+            // %!TeX options is present. All args are provided in a string and {
+            // shell: true }. Quote arguments containing spaces to prevent path
+            // splitting.
             const quoted = tool.args.map(arg => arg.includes(' ') ? `"${arg}"` : arg).join(' ')
             tool.args = [`--max-print-line=${MAX_PRINT_LINE} ${quoted}`]
         } else {
@@ -235,6 +243,11 @@ export class Plan {
         return step.isSkipped
     }
 
+    /**
+     * Decides whether a failed Step may be cleaned and retried once.
+     * Process errors, non-failures, external Steps, termination, and prior
+     * retries are rejected before consulting the root-scoped setting.
+     */
     private canRetry(step: Step, result: StepResult): boolean {
         // Fatal spawn/child-process errors won't be retried.
         if (result.error !== undefined) {
