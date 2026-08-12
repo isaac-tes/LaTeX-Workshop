@@ -5,7 +5,7 @@ import * as path from 'path'
 import { pickRootPath } from '../utils/quick-pick'
 import { lw } from '../lw'
 import type { ProcessEnv, RecipeStep, Step } from '../types'
-import { build as buildRecipe } from './recipe'
+import { build as buildRecipe } from './recipe-old'
 import { build as buildExternal } from './external'
 import { queue } from './queue'
 
