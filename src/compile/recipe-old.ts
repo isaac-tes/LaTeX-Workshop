@@ -4,7 +4,7 @@ import { getWorkingFolder, replaceArgumentPlaceholders } from '../utils/utils'
 
 import { lw } from '../lw'
 import type { Recipe, Tool } from '../types'
-import { queue } from './queue'
+import { legacyState, queue } from './queue'
 
 const logger = lw.log('Build', 'Recipe')
 
@@ -83,7 +83,7 @@ export async function build(rootFile: string, langId: string, buildLoop: () => P
     if (!tools.some(tool => tool.command === 'latexmk' &&
                             tool.args?.includes('-interaction=nonstopmode') &&
                             tool.args?.includes('-f'))) {
-        lw.compile.compiledPDFPath = lw.file.getPdfPath(rootFile)
+        legacyState.compiledPDFPath = lw.file.getPdfPath(rootFile)
     }
     // Execute the build loop
     await buildLoop()

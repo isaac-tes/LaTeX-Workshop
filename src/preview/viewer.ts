@@ -29,7 +29,8 @@ export { serializer } from './viewer/pdfviewerpanel'
 export { hook } from './viewer/pdfviewerhook'
 
 lw.watcher.pdf.onChange(pdfUri => {
-    if (lw.compile.compiledPDFWriting === 0 || path.relative(lw.compile.compiledPDFPath, pdfUri.fsPath) !== '') {
+    if (lw.compile.compiledPDFWriting === 0
+        || path.relative(lw.compile.compiledPDFPath, pdfUri.fsPath) !== '') {
         refresh(pdfUri)
     }
 })

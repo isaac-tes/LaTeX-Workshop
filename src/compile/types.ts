@@ -21,7 +21,6 @@ export type StepResult = {
     stderr: string,
     error?: Error,
     skipped: boolean,
-    // l3backend expected: pdftex | luatex | xetex | dvips | dvipdfmx | dvisvgm
     backend: string
 }
 

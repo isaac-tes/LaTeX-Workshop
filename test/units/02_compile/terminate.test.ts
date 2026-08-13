@@ -3,7 +3,7 @@ import type { ChildProcess } from 'child_process'
 import * as sinon from 'sinon'
 import { assert, mock } from '../utils'
 import { lw } from '../../../src/lw'
-import { queue } from '../../../src/compile/queue'
+import { legacyState, queue } from '../../../src/compile/queue'
 import { terminate } from '../../../src/compile/terminate'
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
@@ -17,7 +17,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
 	const setCompileProcess = (pid: number = 1234) => {
 		const killStub = sinon.stub()
-		lw.compile.process = { pid, kill: killStub } as unknown as ChildProcess
+		legacyState.process = { pid, kill: killStub } as unknown as ChildProcess
 		return killStub
 	}
 
@@ -29,7 +29,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 	})
 
 	beforeEach(() => {
-		lw.compile.process = undefined
+		legacyState.process = undefined
 	})
 
 	afterEach(() => {

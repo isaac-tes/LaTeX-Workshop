@@ -3,7 +3,7 @@ import { replaceArgumentPlaceholders } from '../utils/utils'
 
 import { lw } from '../lw'
 import type { Tool } from '../types'
-import { queue } from './queue'
+import { legacyState, queue } from './queue'
 
 /**
  * Build LaTeX project using external command. This function creates a
@@ -37,7 +37,7 @@ export async function build(command: string, args: string[], pwd: string, buildL
     // Add the build tool to the queue for execution
     queue.add(tool, rootFile, 'External', Date.now(), true, cwd)
 
-    lw.compile.compiledPDFPath = rootFile ? lw.file.getPdfPath(rootFile) : ''
+    legacyState.compiledPDFPath = rootFile ? lw.file.getPdfPath(rootFile) : ''
     // Execute the build loop
     await buildLoop()
 }

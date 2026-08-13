@@ -15,13 +15,13 @@ export async function hostPort() {
     }
 }
 
-export async function build(skipSelection: boolean = false, rootFile: string | undefined = undefined, languageId: string | undefined = undefined, recipe: string | undefined = undefined) {
+export async function build(recipe?: string) {
     let recipeStr = ''
     if (recipe) {
         recipeStr = ` with recipe ${recipe}`
     }
     logger.log(`BUILD command invoked${recipeStr}.`)
-    await lw.compile.build(skipSelection, rootFile, languageId, recipe)
+    await lw.compile.manualBuild(recipe)
 }
 
 export async function revealOutputDir() {
@@ -47,7 +47,7 @@ export function recipes(recipe?: string) {
         return
     }
     if (recipe) {
-        return build(false, undefined, undefined, recipe)
+        return build(recipe)
     }
     return vscode.window.showQuickPick(candidates.map(candidate => candidate.name), {
         placeHolder: 'Please Select a LaTeX Recipe'
@@ -55,7 +55,7 @@ export function recipes(recipe?: string) {
         if (!selected) {
             return
         }
-        return build(false, undefined, undefined, selected)
+        return build(selected)
     })
 }
 
@@ -505,7 +505,7 @@ export function texdocUsepackages() {
 }
 
 export async function saveActive() {
-    lw.compile.lastAutoBuildTime = Date.now()
+    lw.compile.preventAutoBuild()
     await vscode.window.activeTextEditor?.document.save()
 }
 

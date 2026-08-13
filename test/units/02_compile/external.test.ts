@@ -4,7 +4,7 @@ import * as sinon from 'sinon'
 import { assert, get, mock, set } from '../utils'
 import { lw } from '../../../src/lw'
 import * as lwUtils from '../../../src/utils/utils'
-import { queue } from '../../../src/compile/queue'
+import { legacyState, queue } from '../../../src/compile/queue'
 import { build } from '../../../src/compile/external'
 import type { ExternalStep } from '../../../src/types'
 
@@ -94,13 +94,13 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             await build('command', ['arg1', 'arg2'], '/cwd', sinon.stub(), rootFile)
 
-            assert.pathStrictEqual(lw.compile.compiledPDFPath, get.path('main.pdf'))
+            assert.pathStrictEqual(legacyState.compiledPDFPath, get.path('main.pdf'))
         })
 
         it('should not set the compiledPDFPath if no root file is provided', async () => {
             await build('command', ['arg1', 'arg2'], '/cwd', sinon.stub())
 
-            assert.strictEqual(lw.compile.compiledPDFPath, '')
+            assert.strictEqual(legacyState.compiledPDFPath, '')
         })
 
         it('should execute the build loop', async () => {

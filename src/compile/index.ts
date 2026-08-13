@@ -1,14 +1,33 @@
-import type { ChildProcess } from 'child_process'
-import { build, autoBuild, isFileExcludedFromBuildOnSave } from './build'
-import { terminate } from './terminate'
+import {
+    autoBuild,
+    initializeBuild,
+    isFileExcludedFromBuildOnSave,
+    manualBuild,
+    preventAutoBuild,
+    terminate
+} from './build'
+import { executor } from './executor'
+import { Plan } from './plan'
+import { Recipe } from './recipe'
+
+Recipe.initialize()
+Plan.initialize()
+executor.initialize()
+initializeBuild()
 
 export const compile = {
-    build,
+    manualBuild,
     autoBuild,
-    isFileExcludedFromBuildOnSave,
     terminate,
-    lastAutoBuildTime: 0,
-    compiledPDFPath: '',
-    compiledPDFWriting: 0,
-    process: undefined as ChildProcess | undefined
+    preventAutoBuild,
+    isFileExcludedFromBuildOnSave,
+    get backend() {
+        return executor.backend
+    },
+    get compiledPDFPath() {
+        return executor.compiledPDFPath
+    },
+    get compiledPDFWriting() {
+        return executor.compiledPDFWriting
+    }
 }

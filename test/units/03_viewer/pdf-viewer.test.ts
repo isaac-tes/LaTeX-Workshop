@@ -513,6 +513,38 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             lw.viewer.refresh(pdfUri.with({ path: 'nonexistent.pdf' }))
             await promise
         })
+
+        it('should suppress watcher refresh while the Executor writes the same PDF', async () => {
+            const writing = sinon.stub(lw.compile, 'compiledPDFWriting').get(() => 1)
+            const compiledPath = sinon.stub(lw.compile, 'compiledPDFPath').get(() => pdfUri.fsPath)
+
+            try {
+                const promise = waitMsg('')
+                for (const handler of lw.watcher.pdf['onChangeHandlers']) {
+                    handler(pdfUri)
+                }
+                await promise
+            } finally {
+                writing.restore()
+                compiledPath.restore()
+            }
+        })
+
+        it('should allow watcher refresh for a PDF other than the one being written', async () => {
+            const writing = sinon.stub(lw.compile, 'compiledPDFWriting').get(() => 1)
+            const compiledPath = sinon.stub(lw.compile, 'compiledPDFPath').get(() => altUri.fsPath)
+
+            try {
+                const promise = waitMsg(JSON.stringify({type: 'refresh', pdfFileUri: pdfUri.toString(true)}).repeat(2))
+                for (const handler of lw.watcher.pdf['onChangeHandlers']) {
+                    handler(pdfUri)
+                }
+                await promise
+            } finally {
+                writing.restore()
+                compiledPath.restore()
+            }
+        })
     })
 
     describe('lw.viewer->viewer.reload', () => {

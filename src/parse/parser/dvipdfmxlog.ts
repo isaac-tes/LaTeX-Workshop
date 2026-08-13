@@ -1,7 +1,6 @@
 import * as vscode from 'vscode'
 import { lw } from '../../lw'
 import { type IParser, type LogEntry, showCompilerDiagnostics } from './parserutils'
-import { l3backend } from '../../compile/build'
 
 
 const logger = lw.log('Parser', 'DvipdfmxLog')
@@ -66,11 +65,12 @@ function parse(log: string, rootFile?: string) {
         buffer: []
     }
 
-    if (l3backend !== 'dvipdfmx' && l3backend !== 'xetex' && l3backend !== 'unknown') {
+    const backend = lw.compile.backend
+    if (backend !== 'dvipdfmx' && backend !== 'xetex' && backend !== 'unknown') {
         pushLog(
             'information',
             rootFile,
-            `${latexWorkshopMesg} Detected l3backend driver: \`${l3backend}'.\nThe build recipe uses dvipdfmx, but the l3backend used in the DVI file generated this time\ndoes not support it. You should add \`dvipdfmx' to option list of  \\documentclass.\n\t\\documentclass[dvipdfmx, ...]{...}`,
+            `${latexWorkshopMesg} Detected l3backend driver: \`${backend}'.\nThe build recipe uses dvipdfmx, but the l3backend used in the DVI file generated this time\ndoes not support it. You should add \`dvipdfmx' to option list of  \\documentclass.\n\t\\documentclass[dvipdfmx, ...]{...}`,
             1,
             excludeRegexp
         )

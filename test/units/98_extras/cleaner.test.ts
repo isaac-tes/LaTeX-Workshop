@@ -6,7 +6,7 @@ import { glob } from 'glob'
 import { assert, mock, set, log } from '../utils'
 import { lw } from '../../../src/lw'
 import { clean } from '../../../src/extras/cleaner'
-import { build } from '../../../src/compile/build'
+import { manualBuild } from '../../../src/compile/build'
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     const cwd = process.cwd()
@@ -46,7 +46,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     }
 
     before(() => {
-        mock.init(lw, 'file', 'cache', 'extra')
+        mock.init(lw, 'file', 'cache', 'compile', 'extra')
     })
 
     after(() => {
@@ -296,6 +296,8 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
         beforeEach(() => {
             activeStub = mock.activeTextEditor(rootFile, '', { languageId: 'latex' })
+            lw.root.file.path = rootFile
+            lw.root.file.langId = 'latex'
             cleanStub = sinon.stub(lw.extra, 'clean').resolves()
             set.config('latex.tools', [
                 { name: 'ok', command: 'bash', args: ['-c', 'exit 0;'] },
@@ -314,7 +316,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         it('should cover `autoClean.run=never` and failed build (no auto-clean)', async () => {
             set.config('latex.recipes', [{ name: 'recipe', tools: ['bad'] }])
 
-            await build(true, rootFile, 'latex')
+            await manualBuild()
 
             assert.strictEqual(cleanStub.callCount, 0)
         })
@@ -322,7 +324,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         it('should cover `autoClean.run=never` and passed build (no auto-clean)', async () => {
             set.config('latex.recipes', [{ name: 'recipe', tools: ['ok'] }])
 
-            await build(true, rootFile, 'latex')
+            await manualBuild()
 
             assert.strictEqual(cleanStub.callCount, 0)
         })
@@ -331,7 +333,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             set.config('latex.autoClean.run', 'onFailed')
             set.config('latex.recipes', [{ name: 'recipe', tools: ['bad'] }])
 
-            await build(true, rootFile, 'latex')
+            await manualBuild()
 
             assert.strictEqual(cleanStub.callCount, 1)
             assert.strictEqual(cleanStub.firstCall.args[0], rootFile)
@@ -341,10 +343,10 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             set.config('latex.autoClean.run', 'onBuilt')
 
             set.config('latex.recipes', [{ name: 'recipe', tools: ['bad'] }])
-            await build(true, rootFile, 'latex')
+            await manualBuild()
 
             set.config('latex.recipes', [{ name: 'recipe', tools: ['ok'] }])
-            await build(true, rootFile, 'latex')
+            await manualBuild()
 
             assert.strictEqual(cleanStub.callCount, 2)
             assert.strictEqual(cleanStub.firstCall.args[0], rootFile)
@@ -356,7 +358,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             set.config('latex.autoClean.run', 'never')
             set.config('latex.recipes', [{ name: 'recipe', tools: ['bad'] }])
 
-            await build(true, rootFile, 'latex')
+            await manualBuild()
 
             assert.strictEqual(cleanStub.callCount, 1)
             assert.strictEqual(cleanStub.firstCall.args[0], rootFile)

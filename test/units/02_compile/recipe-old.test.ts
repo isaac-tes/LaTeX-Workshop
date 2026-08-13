@@ -4,7 +4,7 @@ import Sinon, * as sinon from 'sinon'
 import { assert, get, log, mock, set, sleep } from '../utils'
 import { lw } from '../../../src/lw'
 import { build, initialize } from '../../../src/compile/recipe-old'
-import { queue } from '../../../src/compile/queue'
+import { legacyState, queue } from '../../../src/compile/queue'
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     let getAuxDirStub: sinon.SinonStub
@@ -30,7 +30,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         getIncludedTeXStub.resetHistory()
         mkdirStub.resetHistory()
         lw.root.subfiles.path = undefined
-        lw.compile.compiledPDFPath = ''
+        legacyState.compiledPDFPath = ''
     })
 
     after(() => {
@@ -103,14 +103,14 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.strictEqual(stub.callCount, 0)
         })
 
-        it('should set lw.compile.compiledPDFPath', async () => {
+        it('should set the legacy compiledPDFPath', async () => {
             const rootFile = set.root('main.tex')
             set.config('latex.tools', [{ name: 'latexmk', command: 'latexmk' }])
             set.config('latex.recipes', [{ name: 'Recipe1', tools: ['latexmk'] }])
 
             await build(rootFile, 'latex', async () => {})
 
-            assert.pathStrictEqual(lw.compile.compiledPDFPath, rootFile.replace('.tex', '.pdf'))
+            assert.pathStrictEqual(legacyState.compiledPDFPath, rootFile.replace('.tex', '.pdf'))
         })
 
         it('should use tool cwd instead of the default working folder', async () => {

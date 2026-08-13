@@ -1,5 +1,5 @@
 import { lw } from '../lw'
-import { queue } from './queue'
+import { legacyState, queue } from './queue'
 
 const logger = lw.log('Build', 'Terminate')
 
@@ -12,11 +12,12 @@ const logger = lw.log('Build', 'Terminate')
  * cached recipe to be executed, are cleared.
  */
 export function terminate() {
-    if (lw.compile.process === undefined) {
+    if (legacyState.process === undefined) {
         logger.log('LaTeX build process to kill is not found.')
         return
     }
-    const pid = lw.compile.process.pid
+    const childProcess = legacyState.process
+    const pid = childProcess.pid
     try {
         logger.log(`Kill child processes of the current process with PID ${pid}.`)
         if (process.platform === 'linux' || process.platform === 'darwin') {
@@ -39,7 +40,7 @@ export function terminate() {
         queue.clear()
 
         // Perform a "double kill" using kill() on the build process
-        lw.compile.process.kill()
+        childProcess.kill()
         logger.log(`Killed the current process with PID ${pid}`)
     }
 }

@@ -1,9 +1,16 @@
 import vscode from 'vscode'
+import type { ChildProcess } from 'child_process'
 import { lw } from '../lw'
 
 import type { ExternalStep, RecipeStep, Step, StepQueue, Tool } from '../types'
 
 const stepQueue: StepQueue = { steps: [], nextSteps: [] }
+
+// Temporary state for legacy compile modules kept until stage 6. Production
+// code does not access or expose it through the compile facade.
+export const legacyState: {compiledPDFPath: string, process?: ChildProcess} = {
+    compiledPDFPath: ''
+}
 
 /**
  * Add a Tool to the queue, either as a RecipeStep or ExternalStep, based on

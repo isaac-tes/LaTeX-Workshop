@@ -28,6 +28,7 @@ export class Executor {
         return this._activePlan
     }
 
+    // l3backend expected: pdftex | luatex | xetex | dvips | dvipdfmx | dvisvgm
     get backend(): string {
         return this._backend
     }
