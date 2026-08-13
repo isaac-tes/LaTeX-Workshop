@@ -1,5 +1,14 @@
 # Change Log
 
+## [10.18.0] - 2026-08-13
+
+### Added
+- (#4955) Support `\setcounter` when calculating section numbers in the Structure view, including counters applied before sections in included files.
+- (#4958) Add color previews and the VS Code color picker for `\definecolor` declarations using the `HTML`, `gray`, `rgb`, and `cmyk` color models.
+
+### Fixed
+- (#4960) Improve compile process and cleanup reliability.
+
 ## [10.17.1] - 2026-08-06
 
 ### Updated
