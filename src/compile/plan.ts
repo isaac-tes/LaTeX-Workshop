@@ -82,24 +82,21 @@ export class Plan {
 
     async run(): Promise<PlanResult> {
         let skipped = true
-        let backend = 'unknown'
 
         for (const step of this.steps) {
             let result = await this.runStep(step)
             skipped = this.aggregateSkipped(skipped, step)
-            backend = result.backend
 
             if (this.canRetry(step, result)) {
                 result = await this.retryStep(step)
                 skipped = this.aggregateSkipped(skipped, step)
-                backend = result.backend
             }
 
             if (result.status !== 'succeeded') {
-                return {status: result.status, step, result, skipped, backend}
+                return {status: result.status, step, result, skipped, backend: result.backend}
             }
             if (step === this.steps.at(-1)) {
-                return {status: 'succeeded', step, result, skipped, backend}
+                return {status: 'succeeded', step, result, skipped, backend: result.backend}
             }
         }
 
