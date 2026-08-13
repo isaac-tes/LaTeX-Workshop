@@ -1,0 +1,726 @@
+# Cache Refactoring Migration Plan
+
+## Status and Authority
+
+This document is the authoritative migration plan for refactoring
+`src/core/cache.ts`. Update this document before changing the implementation if
+new repository facts conflict with the plan or require a behavioral decision.
+Behavior outside the decisions recorded here must not be changed without a new
+review.
+
+Current status: **Planning complete; implementation not started.**
+
+The migration must remain incremental and reversible. Structural moves, test
+moves, and behavior changes belong in separate commits whenever practical.
+
+## Goals
+
+- Keep `src/core/cache.ts` as the only public facade.
+- Replace the facade's object-literal implementation with one production
+  singleton instance of `Cache`.
+- Split storage, dependency discovery, bibliography handling, and auxiliary-file
+  handling into files with explicit responsibilities.
+- Preserve the production API throughout the structural migration.
+- Make every `Cache` instance own independent cache state, in-flight state,
+  refresh counters, and aggressive-refresh timers.
+- Reach 100% statements, branches, functions, and lines coverage for the facade
+  and every file under `src/core/cache/`.
+- Document critical methods and non-obvious ordering, concurrency, recursion,
+  ownership, and lifecycle constraints in English.
+
+## Non-goals
+
+- Do not remove `lw` or introduce dependency injection in this refactoring.
+  Internal modules may import `lw`, `vscode`, and the existing utility modules.
+- Do not refactor project-wide path handling, watcher APIs, or other core
+  modules.
+- Do not support multiple production `Cache` instances. Extra instances exist
+  for isolated unit tests; services reached through `lw`, including watchers,
+  remain shared globals.
+- Do not add `src/core/cache/index.ts`.
+- Do not expose internal classes or helpers through the public facade.
+
+## Target Structure
+
+```text
+src/core/cache.ts
+src/core/cache/cache.ts
+src/core/cache/store.ts
+src/core/cache/dependencies.ts
+src/core/cache/bibliography.ts
+src/core/cache/auxiliaries.ts
+
+test/units/01_core/cache-facade.test.ts
+test/units/01_core/cache.test.ts
+test/units/01_core/cache-store.test.ts
+test/units/01_core/cache-dependencies.test.ts
+test/units/01_core/cache-bibliography.test.ts
+test/units/01_core/cache-auxiliaries.test.ts
+```
+
+### Facade: `src/core/cache.ts`
+
+The facade imports `Cache`, creates the single production instance, registers
+the source-watcher and extension-disposal callbacks for that instance, and
+exports only:
+
+```ts
+export const cache = new Cache()
+```
+
+It must not re-export `Cache`, `CacheStore`, or internal helpers. Unit tests that
+need isolated instances import named exports directly from internal files.
+
+Global listener registration belongs in the facade. Constructing `new Cache()`
+must not subscribe to source watchers or extension lifecycle events. The current
+watcher subscription API does not return a disposable, so instance-level
+registration would leak handlers across tests.
+
+### Coordinator: `cache/cache.ts`
+
+`Cache` owns the public API and coordinates refresh lifecycle, AST parsing,
+completion parsing order, bibliography updates, waiting, resets, disposal, and
+aggressive refreshes. Its constructor takes no arguments and may use `lw`
+directly.
+
+Each instance owns:
+
+- one `CacheStore`;
+- its in-flight and queued-refresh state;
+- its active-refresh count;
+- its generation/revision state;
+- its per-file aggressive-refresh timers;
+- its disposed state.
+
+Completion parsing order remains explicit in `Cache`. Package parsing must stay
+before environment and macro parsing because those parsers depend on package
+information.
+
+### Store: `cache/store.ts`
+
+`CacheStore` is a named-export class containing only instance state and storage
+operations:
+
+- cached `FileCache` values;
+- in-flight task registration and lookup;
+- `get`, `set`, `delete`, `clear`, and `paths`;
+- counters or queue metadata that have no external side effects.
+
+`CacheStore` must not access `lw`, reset watchers, log, emit events, refresh
+files, or implement timeout behavior. `Cache.wait()` remains orchestration in
+`Cache`.
+
+### Dependencies: `cache/dependencies.ts`
+
+This module owns TeX input discovery, `\externaldocument` discovery, included
+TeX graph traversal, path de-duplication, and cycle prevention. Use functions
+and local types rather than another service class.
+
+During the behavior-preserving extraction, define `DependencyContext` in this
+file and pass callbacks such as `getCache`, `watchSource`, and `refreshSource`
+from `Cache`. This temporary callback-based side-effect model avoids importing
+the production singleton and therefore works with isolated `Cache` instances.
+
+In a later phase, discovery functions return explicit discovery results. `Cache`
+then applies watcher and refresh side effects. Internal modules must not import
+each other to reach the production singleton.
+
+### Bibliography: `cache/bibliography.ts`
+
+This module owns BibTeX and glossary resource discovery, registration, and
+included-bibliography graph traversal. Use functions and local types. It may
+access `lw` directly during this refactoring. `Cache` resolves the default root
+before invoking graph queries in the final design.
+
+### Auxiliaries: `cache/auxiliaries.ts`
+
+This module owns both pure `.fls`/`.aux` parsing and the complete
+`loadFlsFile`/`getFlsChildren` workflow. Keep pure parsing visibly separated
+from I/O and mutation inside the file.
+
+During the behavior-preserving extraction, define its callback context type in
+this file. It may call back into the owning `Cache` for cache lookup, source
+registration, and recursive refresh. A later phase replaces discovery side
+effects with returned results coordinated by `Cache`.
+
+The current AUX behavior is intentional during migration: bibliography entries
+found in an AUX file are attached to the current global root cache, which is not
+necessarily the FLS owner. Preserve this behavior with a characterization test.
+Any owner change requires a separately approved behavior change.
+
+## Public API Contract
+
+The production method names, arguments, and runtime calling conventions remain
+compatible:
+
+```ts
+add(filePath: string): void
+get(filePath: string): FileCache | undefined
+paths(): string[]
+getIncludedTeX(filePath?: string): Set<string>
+getIncludedBib(filePath?: string): string[]
+getIncludedGlossaryBib(filePath?: string): string[]
+getFlsChildren(texFile: string): Promise<string[]>
+wait(filePath: string, seconds?: number): Promise<void>
+reset(): void
+refreshCache(filePath: string, rootPath?: string): Promise<void>
+refreshCacheAggressive(filePath: string): void
+loadFlsFile(filePath: string): Promise<void>
+```
+
+Two approved exceptions are part of this plan:
+
+1. Normalize the misleading nested asynchronous return types to
+   `Promise<void>`.
+2. Remove the test-only `promises` property after its tests have migrated to
+   behavior-based assertions.
+
+During the compatibility period, expose `promises` through a getter with the
+same mutable `Map<string, Promise<void>>` type and mark it `@deprecated`. Do not
+change it to `ReadonlyMap` during the compatibility period. Remove it only in
+the dedicated API-cleanup phase.
+
+## Approved Behavioral Changes
+
+The following changes are approved but must not be mixed into the mechanical
+file extraction.
+
+### Per-file refresh coalescing
+
+- Only one refresh for a given normalized path runs at a time.
+- A refresh request received while that path is running sets one pending-rerun
+  flag. Multiple pending requests coalesce into that one rerun.
+- Every caller waits until the path's queue becomes stable, including the rerun.
+- Different paths may refresh concurrently.
+- If the first run fails while a rerun is pending, still execute the rerun and
+  log the first failure. The final rerun result determines the callers' final
+  result.
+- Recursive child refreshes are scheduled by `Cache`, but a parent refresh does
+  not await the entire recursive graph. This avoids wait cycles in circular
+  input graphs.
+
+### Atomic refresh and failure handling
+
+- Build a local draft and replace the committed cache only after all required
+  stages succeed.
+- Preserve the last successful cache if a new refresh fails.
+- Propagate errors to callers that explicitly await the refresh.
+- Always clean in-flight state and active-refresh counts in `finally` paths.
+- Do not emit `FileParsed` for a failed refresh.
+- Log the file path and a fixed refresh stage:
+
+```ts
+type RefreshStage =
+    | 'read'
+    | 'dependencies'
+    | 'ast'
+    | 'completion'
+    | 'bibliography'
+    | 'commit'
+```
+
+- Fire-and-forget boundaries, including watcher callbacks, timers, and child
+  refresh scheduling, must catch and log rejections through one internal helper.
+  They must not cause unhandled promise rejections.
+- When all concurrent refreshes finish, reconstruct the outline once if any
+  refresh committed successfully. One failed file must not hide successful
+  updates from other files.
+
+### Reset, deletion, and disposal
+
+- `reset()` clears caches, resets source/BibTeX/glossary watchers, cancels all
+  aggressive-refresh timers, invalidates old work, and leaves the instance
+  reusable.
+- Use an instance generation or revision so work started before `reset()` cannot
+  commit or emit events afterward.
+- Source deletion removes the committed entry and invalidates any in-flight or
+  queued result for that path. Underlying I/O does not need cancellation.
+- `dispose()` performs reset cleanup and permanently marks the instance as
+  disposed.
+- `reset()` remains idempotent after disposal.
+- State-changing methods throw a clear disposed-instance error after disposal.
+- `get`, `paths`, and included-file graph queries return empty state after
+  disposal.
+- `wait`, `getFlsChildren`, and `loadFlsFile` throw after disposal because they
+  may perform I/O or mutate state.
+
+### Waiting
+
+- Keep `wait(filePath, seconds = 2)` for API compatibility and convert seconds
+  to milliseconds internally.
+- Return immediately when a successful committed cache exists and no refresh is
+  active for the path.
+- Otherwise wait for the path's complete coalesced queue.
+- On timeout, force a refresh. Propagate a forced-refresh failure.
+
+### Aggressive refresh
+
+- Replace the single global debounce timer with one timer per file path.
+- Changes to one file must not cancel another file's delayed refresh.
+- Repeated changes to the same file replace only that file's timer.
+- `reset()` and `dispose()` clear every timer.
+
+### Dependency identity and ordering
+
+- Keep `FileCache.children` as an array.
+- Normalize cache, in-flight, timer, and dependency identity keys with
+  `path.normalize()` in the dedicated behavior phase.
+- On Windows, normalize drive-letter case consistently.
+- Limit this path-identity change to the cache subsystem; do not refactor
+  project-wide path handling.
+- Keep source dependencies in textual order and FLS-only dependencies at the
+  end.
+- De-duplicate by normalized path. Preserve the first meaningful source index;
+  do not replace it with the FLS sentinel `Number.MAX_VALUE`.
+- Preserve original paths where useful in logs.
+
+### Cache eligibility
+
+- Continue reading `latex.watch.files.ignore` dynamically for every exclusion
+  decision.
+- Preserve the current substring-based `expl3-code.tex` exclusion during the
+  structural migration.
+- In the behavior phase, change it to an exact basename comparison and add
+  Windows and case-sensitivity tests.
+
+## Commenting Standard
+
+All new comments are written in English. Comments explain contracts, reasons,
+ordering, ownership, side effects, concurrency, and non-obvious invariants. They
+must not narrate straightforward assignments or repeat the implementation line
+by line.
+
+- Public methods receive concise JSDoc describing their contract, important
+  side effects, and return/error semantics.
+- Complex flows receive a short block comment explaining their phases and why
+  that order matters.
+- Simple getters, setters, and obvious mappings do not require comments.
+
+At minimum, add design comments for:
+
+- `Cache.refreshCache` and its read-to-commit stage order;
+- the per-file queue and coalescing behavior;
+- `Cache.wait`;
+- generation invalidation in `reset()` and `dispose()`;
+- per-file aggressive-refresh debounce;
+- dependency discovery and recursive scheduling;
+- external-document ownership;
+- completion parser ordering;
+- FLS input/output processing;
+- current-root ownership of AUX bibliography data;
+- graph traversal and cycle prevention;
+- atomic cache commit and failure handling.
+
+## Testing and Coverage Policy
+
+Tests remain flat under `test/units/01_core/`:
+
+- `cache-facade.test.ts`: singleton export and global watcher/disposal wiring;
+- `cache.test.ts`: `Cache` orchestration and public behavior;
+- `cache-store.test.ts`: isolated `CacheStore` behavior;
+- `cache-dependencies.test.ts`: input/XR discovery and TeX graph traversal;
+- `cache-bibliography.test.ts`: BibTeX/glossary discovery and traversal;
+- `cache-auxiliaries.test.ts`: FLS/AUX parsing and workflows.
+
+Export only internal units with an independent contract. Use named exports such
+as `Cache`, `CacheStore`, pure FLS/AUX parsers, and graph traversal functions.
+Do not export every helper merely to make coverage easier; private branches are
+covered through public behavior.
+
+Every migration phase must leave `src/core/cache.ts` and every implemented file
+under `src/core/cache/` at exactly 100% for all four metrics:
+
+- statements;
+- branches;
+- functions;
+- lines.
+
+Do not use coverage-ignore comments. Remove unreachable branches or restructure
+them. In particular, checks that treat the non-empty return of `path.resolve()`
+as optional should be removed when their behavior phase is reached.
+
+Coverage is an explicit manual review gate rather than a new CI gate. Record the
+four actual percentages in the phase checklist before completing a phase.
+
+### Node 20 verification environment
+
+Activate Node 20 with the developer's version manager before running any cache
+coverage command. Do not first try the workspace's current Node 26 runtime:
+`c8@11.0.0` currently fails there while loading `yargs`. The repository's GitHub
+Actions jobs use Node 20.
+
+```bash
+node --version
+# Required: v20.x
+
+npm ci
+npm run compile
+```
+
+The current `npm run coverage` command does not enforce the intended cache
+thresholds: its `--src` option appears after the child command, and c8 defaults
+do not require all four metrics or include unloaded files. Until that existing
+script is corrected in its own commit, run the scoped command below under Node
+20 and inspect its per-file output:
+
+```bash
+npx c8 \
+  --all \
+  --src out/src/core \
+  --include 'out/src/core/cache.js' \
+  --include 'out/src/core/cache/**/*.js' \
+  --include 'src/core/cache.ts' \
+  --include 'src/core/cache/**/*.ts' \
+  --exclude-after-remap \
+  --per-file \
+  --100 \
+  npm run test
+```
+
+Both generated JavaScript and source TypeScript include patterns are required:
+tests execute `out/**/*.js`, while source maps remap coverage to `src/**/*.ts`.
+`--all` ensures an unimported new module cannot disappear from the report.
+
+## Migration Checklist
+
+For every phase, fill in **Coverage evidence** with the actual per-file four
+metric values before checking the phase complete.
+
+### [ ] Phase 0: Baseline and characterization tests
+
+**Status:** Not started.
+
+**Goal:** Establish behavior before moving implementation.
+
+**Files affected:** Existing `cache.test.ts` and fixtures only. Test moves may be
+committed separately, but production code does not move in this phase.
+
+**Behavior policy:** Preserve current behavior, including partial-cache
+visibility, concurrent refresh behavior, global aggressive debounce, and AUX
+bibliography ownership. Tests for known defects document behavior without
+endorsing it as the final design.
+
+**Implementation notes:** Add coverage for import-time listener behavior,
+refresh failures, concurrent same-file refreshes, reset during refresh, source
+deletion during refresh, and AUX ownership. Identify every direct test use of
+the `promises` property.
+
+**Required comments:** Test names must state the observed contract; no production
+comments yet.
+
+**Tests to move/add:** Baseline tests that will later move into all six target
+test files.
+
+**Coverage evidence:** Pending: record statements, branches, functions, and
+lines for `src/core/cache.ts`.
+
+**Verification commands:** Node 20 setup, `npm run compile`, relevant unit tests,
+full `npm run test`, and the scoped c8 command above.
+
+**Suggested commit boundary:** Characterization tests only.
+
+**Rollback point:** Revert the test-only commit.
+
+### [ ] Phase 1: Introduce `CacheStore` and `Cache`
+
+**Status:** Not started.
+
+**Goal:** Move instance state into `CacheStore` and public orchestration into a
+named-export `Cache` class without changing runtime behavior.
+
+**Files affected:** `cache/cache.ts`, `cache/store.ts`, `src/core/cache.ts`,
+`cache-store.test.ts`, and `cache.test.ts`.
+
+**Behavior policy:** Mechanical migration only. Keep current cache visibility,
+promise timing, counters, and debounce semantics.
+
+**Implementation notes:** Use a no-argument constructor. Each instance owns its
+store, counter, and timer state. Retain the deprecated `promises` compatibility
+getter with its existing mutable `Map` type. Do not register global listeners in
+the constructor.
+
+**Required comments:** Explain refresh phase order, completion order, waiting,
+and the reason instance construction has no listener side effects.
+
+**Tests to move/add:** Isolated instance-state tests and all `CacheStore` branch
+tests. Keep facade listener tests for Phase 5.
+
+**Coverage evidence:** Pending for `cache/cache.ts`, `cache/store.ts`, and the
+facade.
+
+**Verification commands:** Standard compile, relevant tests, full tests, and
+scoped c8 command under Node 20.
+
+**Suggested commit boundary:** Store/class introduction only.
+
+**Rollback point:** The Phase 0 baseline commit.
+
+### [ ] Phase 2: Extract dependency handling
+
+**Status:** Not started.
+
+**Goal:** Move input, XR, and included-TeX graph logic to `dependencies.ts`.
+
+**Files affected:** `cache/dependencies.ts`, `cache/cache.ts`, and
+`cache-dependencies.test.ts`.
+
+**Behavior policy:** Preserve immediate watcher registration and recursive
+refresh side effects.
+
+**Implementation notes:** Define `DependencyContext` in `dependencies.ts` and
+pass callbacks from the owning `Cache`. Never import or call the production
+singleton. This callback direction is an explicitly temporary migration bridge.
+
+**Required comments:** Explain recursive scheduling, non-blocking child refresh,
+XR root ownership, ordering, de-duplication behavior, and cycle prevention.
+
+**Tests to move/add:** Input discovery, XR discovery, already-watched files,
+missing/root files, circular graphs, duplicates, and default-root traversal.
+
+**Coverage evidence:** Pending for all implemented cache files.
+
+**Verification commands:** Standard Node 20 verification suite.
+
+**Suggested commit boundary:** Dependency extraction only.
+
+**Rollback point:** The completed Phase 1 commit.
+
+### [ ] Phase 3: Extract bibliography handling
+
+**Status:** Not started.
+
+**Goal:** Move BibTeX/glossary discovery, watcher registration, and graph queries
+to `bibliography.ts`.
+
+**Files affected:** `cache/bibliography.ts`, `cache/cache.ts`, and
+`cache-bibliography.test.ts`.
+
+**Behavior policy:** Preserve macro matching, resolution, exclusions, watcher
+side effects, default-root behavior, result ordering, and de-duplication.
+
+**Implementation notes:** Use functions and local types. Direct `lw` access is
+allowed. Do not create another stateful service class.
+
+**Required comments:** Explain supported macro families, bibliography versus
+glossary ownership, and graph cycle prevention.
+
+**Tests to move/add:** All BibTeX/glossary macros, multiple resources,
+exclusions, missing files, watcher state, nested/circular graphs, and duplicates.
+
+**Coverage evidence:** Pending for all implemented cache files.
+
+**Verification commands:** Standard Node 20 verification suite.
+
+**Suggested commit boundary:** Bibliography extraction only.
+
+**Rollback point:** The completed Phase 2 commit.
+
+### [ ] Phase 4: Extract auxiliary-file handling
+
+**Status:** Not started.
+
+**Goal:** Move FLS/AUX parsing and workflows to `auxiliaries.ts`.
+
+**Files affected:** `cache/auxiliaries.ts`, `cache/cache.ts`, and
+`cache-auxiliaries.test.ts`.
+
+**Behavior policy:** Preserve all existing FLS filtering, child ordering,
+watcher/refresh side effects, and current-global-root AUX bibliography ownership.
+
+**Implementation notes:** Keep pure content parsers separate from I/O workflows.
+Define callback context types in this file. Call the owning instance through
+callbacks; never import the production singleton. This is the second temporary
+callback bridge removed in Phase 6.
+
+**Required comments:** Explain INPUT/OUTPUT filtering, FLS-only child ordering,
+AUX source-directory translation, and current-root bibliography ownership.
+
+**Tests to move/add:** Pure parser cases, unreadable/missing FLS/AUX files,
+INPUT/OUTPUT overlap, excluded and missing inputs, self-input, cached/watched
+inputs, non-TeX inputs, AUX bibliography registration, and empty bibdata.
+
+**Coverage evidence:** Pending for all implemented cache files.
+
+**Verification commands:** Standard Node 20 verification suite.
+
+**Suggested commit boundary:** Auxiliary extraction only.
+
+**Rollback point:** The completed Phase 3 commit.
+
+### [ ] Phase 5: Reduce the public facade
+
+**Status:** Not started.
+
+**Goal:** Make `src/core/cache.ts` only create/export the production singleton
+and connect it to global lifecycle events.
+
+**Files affected:** `src/core/cache.ts` and `cache-facade.test.ts`.
+
+**Behavior policy:** Preserve watcher-change refresh, watcher-delete removal,
+watcher resets, and extension disposal behavior.
+
+**Implementation notes:** Export only `cache`. Register source change/delete and
+`lw.onDispose` in the facade. Construction of test instances remains free of
+listener side effects.
+
+**Required comments:** Explain why listener ownership stays in the facade while
+the watcher API lacks disposable subscriptions.
+
+**Tests to move/add:** Singleton identity, exact export surface, source change,
+source delete, and extension disposal wiring.
+
+**Coverage evidence:** Pending for facade and all internal files.
+
+**Verification commands:** Standard Node 20 verification suite.
+
+**Suggested commit boundary:** Facade reduction and facade tests only.
+
+**Rollback point:** The completed Phase 4 commit.
+
+### [ ] Phase 6: Return discoveries to `Cache`
+
+**Status:** Not started.
+
+**Goal:** Establish the target one-way coordination flow:
+
+```text
+facade -> Cache -> store/dependencies/bibliography/auxiliaries
+```
+
+**Files affected:** `cache/cache.ts`, `cache/dependencies.ts`,
+`cache/auxiliaries.ts`, and their tests.
+
+**Behavior policy:** Preserve externally visible behavior. Change only internal
+side-effect ownership.
+
+**Implementation notes:** Replace `watchSource` and `refreshSource` callback
+effects with typed discovery results. `Cache` applies mutations and schedules
+child work. Internal modules must not import each other or the production
+singleton.
+
+**Required comments:** Explain discovery result ownership and why parent refresh
+does not await the full recursive graph.
+
+**Tests to move/add:** Assert returned discoveries separately from the
+coordinator's application of them.
+
+**Coverage evidence:** Pending for all cache files.
+
+**Verification commands:** Standard Node 20 verification suite.
+
+**Suggested commit boundary:** Internal side-effect ownership change only.
+
+**Rollback point:** The completed Phase 5 commit.
+
+### [ ] Phase 7: Apply approved lifecycle and concurrency fixes
+
+**Status:** Not started.
+
+**Goal:** Implement the approved behavior described above.
+
+**Files affected:** Primarily `cache/cache.ts`, `cache/store.ts`, and focused
+tests; dependency files may change for identity and de-duplication.
+
+**Behavior policy:** This is the only broad semantic-change phase. Prefer several
+small commits: queueing, atomic commit/failure behavior, generation invalidation,
+per-file debounce, path identity, dependency ordering, and exact expl3 basename
+matching should remain individually reviewable.
+
+**Implementation notes:** Introduce per-path coalescing, atomic drafts, fixed
+refresh stages, fire-and-forget rejection handling, generation/revision checks,
+per-file timers, cache-local path normalization, and exact eligibility matching.
+
+**Required comments:** All methods listed in the Commenting Standard must now
+have their final design comments.
+
+**Tests to move/add:** Cover every approved success, failure, reset, delete,
+dispose, concurrency, debounce, path, and recursion branch. Include Windows path
+and drive-letter cases.
+
+**Coverage evidence:** Pending for all cache files after every semantic commit.
+
+**Verification commands:** Standard Node 20 verification suite after each
+semantic commit.
+
+**Suggested commit boundary:** One approved behavior family per commit.
+
+**Rollback point:** The completed Phase 6 commit, plus each independently passing
+semantic commit.
+
+### [ ] Phase 8: Remove `promises` and normalize async types
+
+**Status:** Not started.
+
+**Goal:** Complete the two approved public API exceptions.
+
+**Files affected:** `cache/cache.ts`, `src/core/cache.ts` if required, cache tests,
+and any TypeScript callers affected by the normalized signatures.
+
+**Behavior policy:** Do not change runtime behavior beyond removing external
+mutable in-flight access.
+
+**Implementation notes:** Replace remaining tests of `cache.promises` with
+behavioral assertions, remove the deprecated getter, and use `Promise<void>` for
+`refreshCache` and `wait`.
+
+**Required comments:** Public JSDoc must state final wait/refresh completion and
+error semantics.
+
+**Tests to move/add:** Compile-time call-site audit and behavior tests for queue
+completion instead of internal Map inspection.
+
+**Coverage evidence:** Pending for all cache files.
+
+**Verification commands:** Standard Node 20 verification suite plus repository
+search confirming no `cache.promises` references remain.
+
+**Suggested commit boundary:** API cleanup only.
+
+**Rollback point:** The completed Phase 7 sequence.
+
+### [ ] Phase 9: Final audit
+
+**Status:** Not started.
+
+**Goal:** Confirm the implementation matches this document and contains no
+accidental API or responsibility drift.
+
+**Files affected:** Tests, comments, and narrowly scoped corrections only.
+
+**Behavior policy:** No new behavior. Any newly discovered behavior decision
+requires updating and re-approving this plan first.
+
+**Implementation notes:** Audit imports, exports, module direction, instance
+state, listener ownership, disposed behavior, error boundaries, and path rules.
+Remove obsolete comments and ensure remaining comments explain design rather
+than syntax.
+
+**Required comments:** Review the full minimum comment list and public JSDoc.
+
+**Tests to move/add:** Full cache suite and full repository regression suite.
+
+**Coverage evidence:** Record the final per-file table with 100% statements,
+branches, functions, and lines for the facade and every internal file.
+
+**Verification commands:** Node 20 setup, clean compile, relevant tests, full
+tests, scoped c8 command, lint, and a final public-API repository search.
+
+**Suggested commit boundary:** Audit corrections only; no mixed refactoring.
+
+**Rollback point:** The completed Phase 8 commit.
+
+## Completion Criteria
+
+The migration is complete only when:
+
+- every phase is checked and has recorded coverage evidence;
+- `src/core/cache.ts` exports only the production `cache` singleton;
+- every `Cache` instance owns independent mutable state;
+- global listeners are registered only for the facade singleton;
+- the one-way internal coordination flow is in place;
+- all approved concurrency, lifecycle, error, path, and dependency semantics are
+  covered by tests;
+- no production or test code accesses `cache.promises`;
+- all relevant files report 100% for all four coverage metrics under Node 20;
+- compile, lint, focused tests, and the full repository test suite pass;
+- critical and complex methods contain concise English design comments.
