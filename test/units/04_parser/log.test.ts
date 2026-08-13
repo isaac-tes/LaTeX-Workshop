@@ -6,6 +6,7 @@ import { parser } from '../../../src/parse/parser'
 import { bibtexLogParser } from '../../../src/parse/parser/bibtexlog'
 import { biberLogParser } from '../../../src/parse/parser/biberlog'
 import { latexLogParser } from '../../../src/parse/parser/latexlog'
+import { dvipdfmxLogParser } from '../../../src/parse/parser/dvipdfmxlog'
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     before(() => {
@@ -452,6 +453,30 @@ Test message`
             stub.reset()
             assert.strictEqual(warning?.type, 'warning')
             assert.strictEqual(warning?.line, 2)
+        })
+    })
+
+    describe('lw.parser->dvipdfmx backend', () => {
+        it('reads an incompatible backend from the public compile state', () => {
+            const backend = sinon.stub(lw.compile, 'backend').get(() => 'pdftex')
+
+            try {
+                const entries = dvipdfmxLogParser.parse('main.dvi -> main.pdf', get.path('main.tex'))
+                assert.ok(entries.some(entry => entry.text.includes('Detected l3backend driver: `pdftex')))
+            } finally {
+                backend.restore()
+            }
+        })
+
+        it('does not report compatible public compile backends', () => {
+            const backend = sinon.stub(lw.compile, 'backend').get(() => 'dvipdfmx')
+
+            try {
+                const entries = dvipdfmxLogParser.parse('main.dvi -> main.pdf', get.path('main.tex'))
+                assert.ok(entries.every(entry => !entry.text.includes('Detected l3backend driver')))
+            } finally {
+                backend.restore()
+            }
         })
     })
 })

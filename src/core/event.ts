@@ -18,8 +18,7 @@ export enum Events {
     FileChanged = 'FILE_CHANGED',
     FileRemoved = 'FILE_REMOVED',
     DocumentChanged = 'DOCUMENT_CHANGED',
-    StructureUpdated = 'STRUCTURE_UPDATED',
-    AutoCleaned = 'AUTO_CLEANED'
+    StructureUpdated = 'STRUCTURE_UPDATED'
 }
 
 export const event = {
