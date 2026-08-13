@@ -16,12 +16,6 @@ import type { lint } from './lint'
 import type { outline } from './outline'
 import type { parser } from './parse'
 import type { extra } from './extras'
-import {
-    BIB_MAGIC_PROGRAM_NAME,
-    MAGIC_PROGRAM_ARGS_SUFFIX,
-    MAX_PRINT_LINE,
-    TEX_MAGIC_PROGRAM_NAME
-} from './compile/constants'
 
 import type * as commands from './core/commands'
 
@@ -73,10 +67,6 @@ const constant = {
     RSWEAVE_EXT: ['.rnw', '.Rnw', '.rtex', '.Rtex', '.snw', '.Snw'],
     JLWEAVE_EXT: ['.jnw', '.jtexw'],
     PWEAVE_EXT: ['.pnw', '.ptexw'],
-    TEX_MAGIC_PROGRAM_NAME,
-    BIB_MAGIC_PROGRAM_NAME,
-    MAGIC_PROGRAM_ARGS_SUFFIX,
-    MAX_PRINT_LINE,
     /**
      * Prefix that server.ts uses to distinguish requests on pdf files from
      * others. We use '.' because it is not converted by encodeURIComponent and
