@@ -8,6 +8,7 @@ import { lw } from '../lw'
 import type { FileCache } from '../types'
 
 import * as utils from '../utils/utils'
+import * as auxiliaries from './cache/auxiliaries'
 import * as bibliography from './cache/bibliography'
 import * as dependencies from './cache/dependencies'
 import { CacheStore } from './cache/store'
@@ -31,6 +32,14 @@ export class Cache implements vscode.Disposable {
     private readonly bibliographyContext: bibliography.BibliographyContext = {
         getCache: filePath => this.get(filePath),
         isExcluded: filePath => this.isExcluded(filePath)
+    }
+    private readonly auxiliaryContext: auxiliaries.AuxiliaryContext = {
+        getCache: filePath => this.get(filePath),
+        isExcluded: filePath => this.isExcluded(filePath),
+        watchSource: filePath => this.add(filePath),
+        refreshSource: async (filePath, rootPath) => {
+            await this.refreshCache(filePath, rootPath)
+        }
     }
     private readonly watcherSubscription: vscode.Disposable
     /** Coordinates the single outline reconstruction after current refreshes finish. */
@@ -382,173 +391,9 @@ export class Cache implements vscode.Disposable {
         logger.log(`Updated elements in ${elapsed.toFixed(2)} ms: ${fileCache.filePath} .`)
     }
 
-    /**
-     * Loads and processes a .fls file related to a specified file path.
-     *
-     * This function handles the parsing and processing of a .fls file, which
-     * contains information about input and output files involved in the compilation
-     * of a LaTeX document. It retrieves the path to the .fls file associated with
-     * the given file path, reads its content, and parses it to extract input and
-     * output file paths. For each input file, it performs various checks to
-     * determine whether the file should be cached, watched, or ignored. For .tex
-     * files, it ensures they are added as children to the cache of the main file
-     * and refreshes their cache. Non-.tex files are watched unless they are
-     * auto-generated files like .aux or .out. Additionally, if any output files are
-     * .aux files, they are parsed accordingly.
-     *
-     * @param {string} filePath - The path to the main file whose .fls file is to be
-     * loaded and processed.
-     * @returns {Promise<void>} - A promise that resolves when the .fls file is
-     * processed.
-     */
+    /** Loads the owner's FLS/AUX discoveries and propagates workflow failures. */
     async loadFlsFile(filePath: string): Promise<void> {
-        const flsPath = await lw.file.getFlsPath(filePath)
-        if (flsPath === undefined) {
-            return
-        }
-        logger.log(`Parsing .fls ${flsPath} .`)
-        const rootDir = path.dirname(filePath)
-        const auxDir = lw.file.getAuxDir(filePath)
-        const ioFiles = this.parseFlsContent((await lw.file.read(flsPath)) ?? '', rootDir)
-
-        for (const inputFile of ioFiles.input) {
-            const inputUri = lw.file.toUri(inputFile)
-            // Drop files that are also listed as OUTPUT or should be ignored
-            if (ioFiles.output.includes(inputFile) || this.isExcluded(inputFile) || !(await lw.file.exists(inputFile))) {
-                continue
-            }
-            if (inputFile === filePath || lw.watcher.src.has(inputUri)) {
-                // Drop the current rootFile often listed as INPUT
-                // Drop any file that is already watched as it is handled by
-                // onWatchedFileChange.
-                continue
-            }
-            const inputExt = path.extname(inputFile)
-            if (inputExt === '.tex') {
-                if (this.get(filePath) === undefined) {
-                    logger.log(`Cache not finished on ${filePath} when parsing fls, try re-cache.`)
-                    await this.refreshCache(filePath)
-                }
-                // It might be possible that `filePath` is excluded from caching.
-                const fileCache = this.get(filePath)
-                if (fileCache !== undefined) {
-                    // Parse tex files as imported subfiles.
-                    fileCache.children.push({
-                        index: Number.MAX_VALUE,
-                        filePath: inputFile
-                    })
-                    this.add(inputFile)
-                    logger.log(`Found ${inputFile} from .fls ${flsPath} , caching.`)
-                    void this.refreshCache(inputFile, filePath)
-                } else {
-                    logger.log(`Cache not finished on ${filePath} when parsing fls.`)
-                }
-            } else {
-                this.add(inputFile)
-            }
-        }
-
-        for (const outputFile of ioFiles.output) {
-            if (path.extname(outputFile) === '.aux' && (await lw.file.exists(outputFile))) {
-                logger.log(`Found .aux ${outputFile} from .fls ${flsPath} , parsing.`)
-                await this.parseAuxFile(outputFile, path.dirname(outputFile).replace(auxDir, rootDir))
-                logger.log(`Parsed .aux ${outputFile} .`)
-            }
-        }
-        logger.log(`Parsed .fls ${flsPath} .`)
-    }
-
-    /**
-     * Parses the content of a .fls file to extract input and output file paths.
-     *
-     * This function processes the content of a .fls file, identifying and
-     * extracting file paths associated with INPUT and OUTPUT entries. It utilizes a
-     * regular expression to match lines indicating input and output files, then
-     * resolves these paths relative to a given root directory. The function
-     * collects unique input and output file paths using sets and returns them as
-     * arrays.
-     *
-     * @param {string} content - The content of the .fls file to be parsed.
-     * @param {string} rootDir - The root directory used to resolve relative file
-     * paths.
-     * @returns {{input: string[], output: string[]}} - An object containing arrays
-     * of input and output file paths.
-     */
-    private parseFlsContent(content: string, rootDir: string): {input: string[], output: string[]} {
-        const inputFiles: Set<string> = new Set()
-        const outputFiles: Set<string> = new Set()
-        const regex = /^(?:(INPUT)\s*(.*))|(?:(OUTPUT)\s*(.*))$/gm
-        // regex groups
-        // #1: an INPUT entry --> #2 input file path
-        // #3: an OUTPUT entry --> #4: output file path
-        while (true) {
-            const result = regex.exec(content)
-            if (!result) {
-                break
-            }
-            if (result[1]) {
-                const inputFilePath = path.resolve(rootDir, result[2])
-                if (inputFilePath) {
-                    inputFiles.add(inputFilePath)
-                }
-            } else if (result[3]) {
-                const outputFilePath = path.resolve(rootDir, result[4])
-                if (outputFilePath) {
-                    outputFiles.add(outputFilePath)
-                }
-            }
-        }
-
-        return { input: Array.from(inputFiles), output: Array.from(outputFiles) }
-    }
-
-    /**
-     * Parses an auxiliary (.aux) file to extract bibliography data and update the
-     * cache.
-     *
-     * This function reads the content of a specified .aux file and uses a regular
-     * expression to find `\bibdata` entries. It extracts the bibliography file
-     * names, splits them into an array, and trims any whitespace. For each
-     * bibliography file name, it determines the corresponding file paths and checks
-     * if these paths are excluded from caching. If not excluded, it adds the
-     * bibliography paths to the root file's bibliography set and logs the
-     * discovery. It also ensures that the bibliography paths are being watched for
-     * changes by adding them to the watcher.
-     *
-     * @param {string} filePath - The path to the .aux file to be parsed.
-     * @param {string} srcDir - The source directory used to resolve bibliography
-     * file paths.
-     */
-    private async parseAuxFile(filePath: string, srcDir: string) {
-        const content = (await lw.file.read(filePath)) ?? ''
-        const regex = /^\\bibdata\{([^}]*)\}/gm
-        let result: RegExpExecArray | null
-        while ((result = regex.exec(content)) !== null) {
-            const bibs = result[1]
-                .split(',')
-                .map(b => b.trim())
-                .filter(b => b.length > 0)
-            if (bibs.length === 0) {
-                logger.log(`Empty \\bibdata in .aux ${filePath} , skip.`)
-                continue
-            }
-            for (const bib of bibs) {
-                const bibPaths = await lw.file.getBibPath(bib, srcDir)
-                for (const bibPath of bibPaths) {
-                    if (this.isExcluded(bibPath)) {
-                        continue
-                    }
-                    if (lw.root.file.path && !this.get(lw.root.file.path)?.bibfiles.has(bibPath)) {
-                        this.get(lw.root.file.path)?.bibfiles.add(bibPath)
-                        logger.log(`Found .bib ${bibPath} from .aux ${filePath} .`)
-                    }
-                    const bibUri = lw.file.toUri(bibPath)
-                    if (!lw.watcher.bib.has(bibUri)) {
-                        lw.watcher.bib.add(bibUri)
-                    }
-                }
-            }
-        }
+        await auxiliaries.loadFlsFile(filePath, this.auxiliaryContext)
     }
 
     /**
@@ -607,13 +452,7 @@ export class Cache implements vscode.Disposable {
      * file dependencies of the TeX file.
      */
     async getFlsChildren(texFile: string): Promise<string[]> {
-        const flsPath = await lw.file.getFlsPath(texFile)
-        if (flsPath === undefined) {
-            return []
-        }
-        const rootDir = path.dirname(texFile)
-        const ioFiles = this.parseFlsContent((await lw.file.read(flsPath)) ?? '', rootDir)
-        return ioFiles.input
+        return auxiliaries.getFlsChildren(texFile)
     }
 }
 

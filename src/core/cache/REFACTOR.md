@@ -8,7 +8,7 @@ new repository facts conflict with the plan or require a behavioral decision.
 Behavior outside the decisions recorded here must not be changed without a new
 review.
 
-Current status: **Phase 3 complete; Phase 4 not started.**
+Current status: **Phase 4 complete; Phase 5 not started.**
 
 The migration must remain incremental and reversible. Structural moves, test
 moves, and behavior changes belong in separate commits whenever practical.
@@ -162,15 +162,23 @@ This module owns both pure `.fls`/`.aux` parsing and the complete
 `loadFlsFile`/`getFlsChildren` workflow. Keep pure parsing visibly separated
 from I/O and mutation inside the file.
 
-During the behavior-preserving extraction, define its callback context type in
-this file. It may call back into the owning `Cache` for cache lookup, source
-registration, and recursive refresh. A later phase replaces discovery side
-effects with returned results coordinated by `Cache`.
+During extraction, define `AuxiliaryContext` in this file with `getCache`,
+`isExcluded`, `watchSource`, and `refreshSource` callbacks from the owning
+`Cache`. Each `Cache` creates one immutable context using arrow wrappers. The
+module may directly use `lw` for file services, watcher queries and registration,
+and logging, but it must never access `lw.cache`.
 
-The current AUX behavior is intentional during migration: bibliography entries
-found in an AUX file are attached to the current global root cache, which is not
-necessarily the FLS owner. Preserve this behavior with a characterization test.
-Any owner change requires a separately approved behavior change.
+Phase 4 deliberately changes AUX bibliography ownership: every AUX file parsed
+from one FLS workflow attaches discoveries to the fixed `loadFlsFile(filePath)`
+owner, not to mutable `lw.root.file.path`. `lw.file.getBibPath` retains its
+existing search order, including its remaining dynamic `lw.root.dir.path`
+dependency. Reconsider an explicit owner-root argument when Phase 6 establishes
+the one-way discovery flow; do not expand Phase 4 into a `core/file.ts` API
+change.
+
+Phase 6 removes `AuxiliaryContext` completely. Auxiliary discovery returns typed
+results, and `Cache` applies filtering, cache mutation, watcher registration,
+and child scheduling.
 
 ## Public API Contract
 
@@ -193,7 +201,7 @@ refreshCacheAggressive(filePath: string): void
 loadFlsFile(filePath: string): Promise<void>
 ```
 
-Three approved exceptions are part of this plan, all applied in Phase 8:
+Three approved API exceptions are part of this plan, all applied in Phase 8:
 
 1. Normalize the misleading nested asynchronous return types to
    `Promise<void>`.
@@ -209,8 +217,28 @@ the dedicated API-cleanup phase.
 
 ## Approved Behavioral Changes
 
-The following changes are approved but must not be mixed into the mechanical
-file extraction.
+The following changes are approved only in their named phases. Phase 4 includes
+the explicitly reviewed auxiliary exceptions below; unrelated extraction phases
+must keep mechanical moves separate from later behavior work.
+
+### Phase 4 auxiliary behavior
+
+The Phase 4 extraction has three explicitly approved behavior adjustments:
+
+- Every extension classification in `auxiliaries.ts` is case-insensitive. This
+  makes mixed-case `.tex` inputs TeX children and mixed-case `.aux` outputs AUX
+  files. Other extensions are not given new classifications.
+- AUX bibliography discoveries belong to the fixed FLS owner passed to
+  `loadFlsFile`, even if the global root differs or changes during processing.
+- AUX-to-source directory translation resolves the configured AUX root and uses
+  `path.relative` containment. Outputs inside that root map to the corresponding
+  source subtree; outputs outside it retain their own directory. This replaces
+  the fragile first-substring `.replace(auxDir, rootDir)` behavior.
+
+FLS INPUT remains deliberately generic. Existing `.aux`, `.out`, and every
+other non-TeX INPUT are watched when they pass the ordinary overlap, exclusion,
+existence, self, and already-watched filters. These extensions receive no
+special intermediate-file exclusion.
 
 ### Per-file refresh coalescing
 
@@ -334,7 +362,7 @@ At minimum, add design comments for:
 - external-document ownership;
 - completion parser ordering;
 - FLS input/output processing;
-- current-root ownership of AUX bibliography data;
+- fixed FLS-owner ownership of AUX bibliography data;
 - graph traversal and cycle prevention;
 - atomic cache commit and failure handling.
 
@@ -722,31 +750,57 @@ the full suite and final scoped coverage run passed with **1115 passing**.
 
 **Rollback point:** The completed Phase 2 commit.
 
-### [ ] Phase 4: Extract auxiliary-file handling
+### [x] Phase 4: Extract auxiliary-file handling
 
-**Status:** Not started.
+**Status:** Complete on 2026-08-14.
 
 **Goal:** Move FLS/AUX parsing and workflows to `auxiliaries.ts`.
 
 **Files affected:** `cache/auxiliaries.ts`, `src/core/cache.ts`, and
 `cache-auxiliaries.test.ts`.
 
-**Behavior policy:** Preserve all existing FLS filtering, child ordering,
-watcher/refresh side effects, and current-global-root AUX bibliography ownership.
+**Behavior policy:** Preserve FLS regexes, filtering order, child ordering,
+serial I/O, watcher/refresh side effects, immediate error propagation, and the
+unfiltered `getFlsChildren` query. Apply only the three approved Phase 4 changes:
+case-insensitive extension classification, fixed FLS-owner AUX bibliography
+ownership, and containment-aware AUX source-directory mapping. Existing AUX,
+OUT, and other non-TeX INPUT files remain ordinary watched inputs.
 
-**Implementation notes:** Keep pure content parsers separate from I/O workflows.
-Define callback context types in this file. Call the owning instance through
-callbacks; never import the production singleton. This is the second temporary
-callback bridge removed in Phase 6.
+**Implementation notes:** Export only `parseFlsContent`, `parseAuxContent`,
+`loadFlsFile`, `getFlsChildren`, their result types, and `AuxiliaryContext`.
+Keep AUX I/O/mutation helpers private. Pure parsers have no `lw`, filesystem,
+watcher, or cache access. One immutable per-instance context supplies
+`getCache`, `isExcluded`, `watchSource`, and awaitable `refreshSource` arrow
+wrappers; never import the production singleton. FLS inputs run serially before
+AUX outputs. Owner recovery is awaited, while child refresh remains
+fire-and-forget. This temporary callback bridge is removed in Phase 6.
 
 **Required comments:** Explain INPUT/OUTPUT filtering, FLS-only child ordering,
-AUX source-directory translation, and current-root bibliography ownership.
+fire-and-forget child refresh, AUX containment/fallback translation, fixed-owner
+bibliography ownership, and parsing order.
 
-**Tests to move/add:** Pure parser cases, unreadable/missing FLS/AUX files,
-INPUT/OUTPUT overlap, excluded and missing inputs, self-input, cached/watched
-inputs, non-TeX inputs, AUX bibliography registration, and empty bibdata.
+**Tests to move/add:** Move direct tests to flat `cache-auxiliaries.test.ts` and
+share the existing `test/units/01_core/cache/` fixtures. Cover pure parsers,
+unreadable/missing FLS/AUX files, INPUT/OUTPUT overlap, exclusions and missing
+inputs, self/already-watched inputs, generic AUX/OUT/non-TeX inputs,
+case-insensitive classification, MAX_VALUE child ordering, awaited owner versus
+non-blocking child refresh, unfiltered `getFlsChildren`, containment/fallback
+path mapping, fixed owner despite global-root changes, bibliography ordering,
+exclusion/de-duplication/watcher behavior, and immediate error propagation.
+Keep only facade context/forwarding coordination in `cache.test.ts`.
 
-**Coverage evidence:** Pending for all implemented cache files.
+**Coverage evidence:** The final scoped c8 run reported statements **100%**,
+branches **100%**, functions **100%**, and lines **100%** separately for
+`src/core/cache.ts`, `src/core/cache/auxiliaries.ts`,
+`src/core/cache/bibliography.ts`, `src/core/cache/dependencies.ts`, and
+`src/core/cache/store.ts`. The aggregate row also reported 100% for all four
+metrics.
+
+**Verification evidence:** All commands ran with Node `v20.20.2`. ESLint passed
+for the full repository. Both `tsc -p tsconfig.json` and
+`tsc -p viewer/tsconfig.json` passed. The final focused cache suite passed with
+**105 passing**; the full suite and final scoped coverage run passed with
+**1112 passing**.
 
 **Verification commands:** Standard Node 20 verification suite.
 
@@ -803,13 +857,15 @@ cache module -> Cache -> store/dependencies/bibliography/auxiliaries
 **Behavior policy:** Preserve externally visible behavior. Change only internal
 side-effect ownership.
 
-**Implementation notes:** Remove `DependencyContext` and
-`BibliographyContext` completely and replace their side-effect callbacks with
-typed discovery results. `Cache` applies mutations, exclusions, watcher
-registration, and child scheduling. `getIncludedTeX` and bibliography graph
-queries may retain one standalone read-only cache lookup callback, which is not
-a side-effect context. Internal modules must not import each other or the
-production singleton.
+**Implementation notes:** Remove `DependencyContext`, `BibliographyContext`, and
+`AuxiliaryContext` completely and replace their side-effect callbacks with typed
+discovery results. `Cache` applies mutations, exclusions, watcher registration,
+and child scheduling. `getIncludedTeX` and bibliography graph queries may retain
+one standalone read-only cache lookup callback, which is not a side-effect
+context. Internal modules must not import each other or the production
+singleton. Re-evaluate the residual dynamic `lw.root.dir.path` search inside
+`lw.file.getBibPath` and, if necessary, pass an explicit owner root without
+changing bibliography search semantics accidentally.
 
 **Required comments:** Explain discovery result ownership and why parent refresh
 does not await the full recursive graph.

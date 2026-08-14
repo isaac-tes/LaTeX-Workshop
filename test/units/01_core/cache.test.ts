@@ -6,6 +6,7 @@ import * as sinon from 'sinon'
 import { assert, get, log, mock, set, sleep } from '../utils'
 import { lw } from '../../../src/lw'
 import { Cache } from '../../../src/core/cache'
+import * as auxiliaries from '../../../src/core/cache/auxiliaries'
 import * as bibliography from '../../../src/core/cache/bibliography'
 import * as dependencies from '../../../src/core/cache/dependencies'
 
@@ -733,195 +734,25 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
     })
 
-    describe('lw.cache.loadFlsFile and lw.cache.parseFlsContent', () => {
-        it('should do nothing if no .fls is found', async () => {
-            const texPathAnother = get.path(fixture, 'another.tex')
+    describe('lw.cache auxiliary coordination', () => {
+        it('should forward FLS workflows through one owning instance context', async () => {
+            const loadStub = sinon.stub(auxiliaries, 'loadFlsFile').resolves()
+            const childrenStub = sinon.stub(auxiliaries, 'getFlsChildren').resolves(['/child.tex'])
 
-            await lw.cache.loadFlsFile(texPathAnother)
-            assert.notHasLog('Parsing .fls ')
-        })
+            try {
+                await lw.cache.loadFlsFile('/owner.tex')
+                assert.deepStrictEqual(await lw.cache.getFlsChildren('/candidate.tex'), ['/child.tex'])
 
-        it('should parse an unreadable .fls file as empty', async () => {
-            const toParse = get.path(fixture, 'load_fls_file', 'include_main.tex')
-            const flsPath = get.path(fixture, 'load_fls_file', 'include_main.fls')
-            const readStub = sinon.stub(lw.file, 'read').callThrough()
-            readStub.withArgs(flsPath).resolves(undefined)
-
-            await lw.cache.loadFlsFile(toParse)
-            readStub.restore()
-
-            assert.strictEqual(lw.cache.get(toParse), undefined)
-            assert.hasLog(`Parsed .fls ${flsPath} .`)
-        })
-
-        it('should not consider files that are both INPUT and OUTPUT', async () => {
-            const toParse = get.path(fixture, 'load_fls_file', 'both_input_output.tex')
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.loadFlsFile(toParse)
-            assert.listStrictEqual(lw.cache.get(toParse)?.children, [])
-        })
-
-        it('should not consider files that are excluded', async () => {
-            const toParse = get.path(fixture, 'load_fls_file', 'excluded_file.tex')
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.loadFlsFile(toParse)
-            assert.listStrictEqual(lw.cache.get(toParse)?.children, [])
-        })
-
-        it('should not consider files that do not exist', async () => {
-            const toParse = get.path(fixture, 'load_fls_file', 'file_not_exist.tex')
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.loadFlsFile(toParse)
-            assert.listStrictEqual(lw.cache.get(toParse)?.children, [])
-        })
-
-        it('should not consider the file itself if listed in .fls', async () => {
-            const toParse = get.path(fixture, 'load_fls_file', 'self_include.tex')
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.loadFlsFile(toParse)
-            assert.listStrictEqual(lw.cache.get(toParse)?.children, [])
-        })
-
-        it('should not consider files that already been cached', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-
-            lw.cache.add(texPath)
-            await lw.cache.refreshCache(texPath)
-            const toParse = get.path(fixture, 'load_fls_file', 'include_main.tex')
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.loadFlsFile(toParse)
-            assert.listStrictEqual(lw.cache.get(toParse)?.children, [])
-        })
-
-        it('should add file as child if all checks passed', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-            const toParse = get.path(fixture, 'load_fls_file', 'include_main.tex')
-
-            await lw.cache.loadFlsFile(toParse)
-            assert.listStrictEqual(
-                lw.cache.get(toParse)?.children.map((child) => child.filePath),
-                [texPath]
-            )
-        })
-
-        it('should add multiple files as children if all checks passed', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-            const texPathAnother = get.path(fixture, 'another.tex')
-            const toParse = get.path(fixture, 'load_fls_file', 'include_many.tex')
-
-            await lw.cache.loadFlsFile(toParse)
-            assert.listStrictEqual(
-                lw.cache.get(toParse)?.children.map((child) => child.filePath),
-                [texPath, texPathAnother]
-            )
-        })
-
-        it('should watch added .tex files', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-            const toParse = get.path(fixture, 'load_fls_file', 'include_main.tex')
-
-            await lw.cache.loadFlsFile(toParse)
-            assert.ok(lw.watcher.src.has(vscode.Uri.file(texPath)))
-        })
-
-        it('should watch added non-.tex files', async () => {
-            const pdfPath = get.path(fixture, 'main.pdf')
-            const toParse = get.path(fixture, 'load_fls_file', 'non_tex_input.tex')
-
-            await lw.cache.loadFlsFile(toParse)
-            assert.ok(lw.watcher.src.has(vscode.Uri.file(pdfPath)))
-        })
-
-        it('should watch added non-.tex files, except for aux or out files', async () => {
-            const toParse = get.path(fixture, 'load_fls_file', 'aux_out_input.tex')
-            await lw.cache.loadFlsFile(toParse)
-            assert.ok(!lw.watcher.src.has(vscode.Uri.file(get.path(fixture, 'load_fls_file', 'main.aux'))))
-            assert.ok(!lw.watcher.src.has(vscode.Uri.file(get.path(fixture, 'load_fls_file', 'main.out'))))
-        })
-
-        it('should handle an excluded root while parsing TeX inputs', async () => {
-            const toParse = get.path(fixture, 'load_fls_file', 'include_main.tex')
-            set.config('latex.watch.files.ignore', ['**/include_main.tex'])
-
-            await lw.cache.loadFlsFile(toParse)
-
-            assert.strictEqual(lw.cache.get(toParse), undefined)
-            assert.hasLog(`Cache not finished on ${toParse} when parsing fls.`)
-        })
-    })
-
-    describe('lw.cache.parseAuxFile', () => {
-        it('should do nothing if no \\bibdata is found', async () => {
-            const toParse = get.path(fixture, 'load_aux_file', 'nothing.tex')
-            set.root(fixture, 'load_aux_file', 'nothing.tex')
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.loadFlsFile(toParse)
-            assert.listStrictEqual(Array.from(lw.cache.get(toParse)?.bibfiles ?? new Set([''])), [])
-        })
-
-        it('should ignore an empty \\bibdata entry', async () => {
-            const toParse = get.path(fixture, 'load_aux_file', 'empty.tex')
-            set.root(fixture, 'load_aux_file', 'empty.tex')
-
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.loadFlsFile(toParse)
-
-            assert.listStrictEqual(Array.from(lw.cache.get(toParse)?.bibfiles ?? new Set([''])), [])
-            assert.hasLog('Empty \\bibdata in .aux ')
-        })
-
-        it('should parse an unreadable auxiliary file as empty', async () => {
-            const toParse = get.path(fixture, 'load_aux_file', 'main.tex')
-            const auxPath = get.path(fixture, 'load_aux_file', 'main.aux')
-            const readStub = sinon.stub(lw.file, 'read').callThrough()
-            readStub.withArgs(auxPath).resolves(undefined)
-            set.root(fixture, 'load_aux_file', 'main.tex')
-
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.loadFlsFile(toParse)
-            readStub.restore()
-
-            assert.listStrictEqual(Array.from(lw.cache.get(toParse)?.bibfiles ?? []), [])
-        })
-
-        it('should add \\bibdata from .aux file', async () => {
-            const toParse = get.path(fixture, 'load_aux_file', 'main.tex')
-            set.root(fixture, 'load_aux_file', 'main.tex')
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.loadFlsFile(toParse)
-            assert.listStrictEqual(Array.from(lw.cache.get(toParse)?.bibfiles ?? new Set()), [
-                get.path(fixture, 'load_aux_file', 'main.bib'),
-            ])
-        })
-
-        it('should not add \\bibdata if the bib is excluded', async () => {
-            set.config('latex.watch.files.ignore', ['**/main.bib'])
-            const toParse = get.path(fixture, 'load_aux_file', 'main.tex')
-            set.root(fixture, 'load_aux_file', 'main.tex')
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.loadFlsFile(toParse)
-            assert.listStrictEqual(Array.from(lw.cache.get(toParse)?.bibfiles ?? new Set([''])), [])
-        })
-
-        it('should watch bib files if added', async () => {
-            const toParse = get.path(fixture, 'load_aux_file', 'main.tex')
-            set.root(fixture, 'load_aux_file', 'main.tex')
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.loadFlsFile(toParse)
-            assert.ok(lw.watcher.bib.has(vscode.Uri.file(get.path(fixture, 'load_aux_file', 'main.bib'))))
-        })
-
-        it('should attach AUX bibliography data to the current root instead of the FLS owner', async () => {
-            const rootPath = set.root(fixture, 'another.tex')
-            const flsOwner = get.path(fixture, 'load_aux_file', 'main.tex')
-            const bibPath = get.path(fixture, 'main.bib')
-            await lw.cache.refreshCache(rootPath)
-            await lw.cache.refreshCache(flsOwner)
-
-            await lw.cache.loadFlsFile(flsOwner)
-
-            assert.listStrictEqual(Array.from(lw.cache.get(rootPath)?.bibfiles ?? []), [bibPath])
-            assert.listStrictEqual(Array.from(lw.cache.get(flsOwner)?.bibfiles ?? []), [])
+                sinon.assert.calledOnceWithExactly(loadStub, '/owner.tex', loadStub.firstCall.args[1])
+                sinon.assert.calledOnceWithExactly(childrenStub, '/candidate.tex')
+                assert.strictEqual(typeof loadStub.firstCall.args[1].getCache, 'function')
+                assert.strictEqual(typeof loadStub.firstCall.args[1].isExcluded, 'function')
+                assert.strictEqual(typeof loadStub.firstCall.args[1].watchSource, 'function')
+                assert.strictEqual(typeof loadStub.firstCall.args[1].refreshSource, 'function')
+            } finally {
+                loadStub.restore()
+                childrenStub.restore()
+            }
         })
     })
 
@@ -964,30 +795,4 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
     })
 
-    describe('lw.cache.getFlsChildren', () => {
-        it('should return an empty list if no .fls is found', async () => {
-            const texPathAnother = get.path(fixture, 'another.tex')
-
-            assert.listStrictEqual(await lw.cache.getFlsChildren(texPathAnother), [])
-        })
-
-        it('should return a list of input files in the .fls file', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-            const toParse = get.path(fixture, 'load_fls_file', 'include_main.tex')
-
-            assert.listStrictEqual(await lw.cache.getFlsChildren(toParse), [texPath])
-        })
-
-        it('should return no input files when the .fls file cannot be read', async () => {
-            const toParse = get.path(fixture, 'load_fls_file', 'include_main.tex')
-            const flsPath = get.path(fixture, 'load_fls_file', 'include_main.fls')
-            const readStub = sinon.stub(lw.file, 'read').callThrough()
-            readStub.withArgs(flsPath).resolves(undefined)
-
-            const children = await lw.cache.getFlsChildren(toParse)
-            readStub.restore()
-
-            assert.listStrictEqual(children, [])
-        })
-    })
 })
