@@ -8,23 +8,25 @@ new repository facts conflict with the plan or require a behavioral decision.
 Behavior outside the decisions recorded here must not be changed without a new
 review.
 
-Current status: **Phase 1.5 complete; Phase 2 not started.**
+Current status: **Phase 1.5 and the coordinator consolidation are complete;
+Phase 2 not started.**
 
 The migration must remain incremental and reversible. Structural moves, test
 moves, and behavior changes belong in separate commits whenever practical.
 
 ## Goals
 
-- Keep `src/core/cache.ts` as the only public facade.
-- Replace the facade's object-literal implementation with one production
-  singleton instance of `Cache`.
+- Keep `src/core/cache.ts` as the public cache module containing the coordinator
+  class and its production singleton.
+- Replace the original object-literal implementation with one production
+  singleton instance of `Cache`, created at the end of the module.
 - Split storage, dependency discovery, bibliography handling, and auxiliary-file
   handling into files with explicit responsibilities.
 - Preserve the production API throughout the structural migration.
 - Make every `Cache` instance own independent cache state, in-flight state,
   refresh counters, aggressive-refresh timers, and watcher subscriptions.
-- Reach 100% statements, branches, functions, and lines coverage for the facade
-  and every file under `src/core/cache/`.
+- Reach 100% statements, branches, functions, and lines coverage for the public
+  cache module and every file under `src/core/cache/`.
 - Document critical methods and non-obvious ordering, concurrency, recursion,
   ownership, and lifecycle constraints in English.
 
@@ -40,19 +42,19 @@ moves, and behavior changes belong in separate commits whenever practical.
   remain shared globals. Every extra `Cache` instance must be disposed by its
   test.
 - Do not add `src/core/cache/index.ts`.
-- Do not expose internal classes or helpers through the public facade.
+- Do not expose `CacheStore` or extracted helper APIs through the public cache
+  module. `Cache` remains exported so tests can construct isolated instances.
 
 ## Target Structure
 
 ```text
 src/core/cache.ts
-src/core/cache/cache.ts
 src/core/cache/store.ts
 src/core/cache/dependencies.ts
 src/core/cache/bibliography.ts
 src/core/cache/auxiliaries.ts
 
-test/units/01_core/cache-facade.test.ts
+test/units/01_core/cache-lifecycle.test.ts
 test/units/01_core/cache.test.ts
 test/units/01_core/cache-store.test.ts
 test/units/01_core/cache-dependencies.test.ts
@@ -60,24 +62,26 @@ test/units/01_core/cache-bibliography.test.ts
 test/units/01_core/cache-auxiliaries.test.ts
 ```
 
-### Facade: `src/core/cache.ts`
+### Public coordinator: `src/core/cache.ts`
 
-The facade imports `Cache`, creates the single production instance, registers
-that disposable instance with the extension lifecycle, and exports only:
+This module defines and exports `Cache`. After the class definition, it creates
+the single production instance, registers that disposable instance with the
+extension lifecycle, and exports it:
 
 ```ts
 export const cache = new Cache()
+lw.onDispose(cache)
 ```
 
-It must not re-export `Cache`, `CacheStore`, or internal helpers. Unit tests that
-need isolated instances import named exports directly from internal files.
+Production consumers continue to import `cache`. Unit tests that need isolated
+instances import `Cache` from this module. The module must not re-export
+`CacheStore` or extracted helpers.
 
 The `Cache` constructor subscribes directly to `lw.watcher.src` and owns the
 returned disposables. It must not register itself with the extension lifecycle;
-the facade alone passes the production instance to `lw.onDispose`. Tests that
-construct additional instances must dispose them in `finally` or teardown.
-
-### Coordinator: `cache/cache.ts`
+the module-level statement after singleton creation alone passes the production
+instance to `lw.onDispose`. Tests that construct additional instances must
+dispose them in `finally` or teardown.
 
 `Cache` owns the public API and coordinates refresh lifecycle, AST parsing,
 completion parsing order, bibliography updates, waiting, resets, disposal, and
@@ -317,7 +321,7 @@ At minimum, add design comments for:
 
 Tests remain flat under `test/units/01_core/`:
 
-- `cache-facade.test.ts`: singleton export and extension-disposal wiring;
+- `cache-lifecycle.test.ts`: singleton export and extension-disposal wiring;
 - `cache.test.ts`: `Cache` orchestration and public behavior;
 - `cache-store.test.ts`: isolated `CacheStore` behavior;
 - `cache-dependencies.test.ts`: input/XR discovery and TeX graph traversal;
@@ -478,6 +482,11 @@ creation and global lifecycle wiring in this phase; do not retain forwarding
 wrappers solely to defer that structural result to Phase 5. Phase 1.5 explicitly
 supersedes the listener-ownership decision after making subscriptions disposable.
 
+After Phase 1.5, the coordinator was moved back into `src/core/cache.ts` because
+the remaining facade contained only singleton creation and lifecycle wiring.
+Those statements now live after the `Cache` class. This supersedes the target
+location above while preserving the Phase 1 commit history and behavior.
+
 **Required comments:** Explain refresh phase order, completion order, waiting,
 and the listener ownership used at this phase boundary.
 
@@ -563,13 +572,31 @@ and cache tests, full tests, and scoped per-file 100% coverage.
 
 **Rollback point:** The completed Phase 1 commit.
 
+#### [x] Post-Phase 1.5: Consolidate the public cache module
+
+**Status:** Complete on 2026-08-14.
+
+The coordinator moved from `src/core/cache/cache.ts` back into
+`src/core/cache.ts`. The `Cache` class remains available for isolated tests,
+while production consumers continue to use the `cache` singleton. Singleton
+creation and `lw.onDispose(cache)` are the final module-level statements. No
+runtime behavior or lifecycle ownership changed.
+
+**Verification evidence:** ESLint and both TypeScript compilations passed under
+Node `v20.20.2`. The focused cache/watcher suite passed with **131 passing**.
+The full suite passed with **1114 passing**, and the scoped per-file coverage run
+reported **100%** statements, branches, functions, and lines for
+`src/core/cache.ts` and `src/core/cache/store.ts`.
+
+**Rollback point:** The completed Phase 1.5 commit.
+
 ### [ ] Phase 2: Extract dependency handling
 
 **Status:** Not started.
 
 **Goal:** Move input, XR, and included-TeX graph logic to `dependencies.ts`.
 
-**Files affected:** `cache/dependencies.ts`, `cache/cache.ts`, and
+**Files affected:** `cache/dependencies.ts`, `src/core/cache.ts`, and
 `cache-dependencies.test.ts`.
 
 **Behavior policy:** Preserve immediate watcher registration and recursive
@@ -600,7 +627,7 @@ missing/root files, circular graphs, duplicates, and default-root traversal.
 **Goal:** Move BibTeX/glossary discovery, watcher registration, and graph queries
 to `bibliography.ts`.
 
-**Files affected:** `cache/bibliography.ts`, `cache/cache.ts`, and
+**Files affected:** `cache/bibliography.ts`, `src/core/cache.ts`, and
 `cache-bibliography.test.ts`.
 
 **Behavior policy:** Preserve macro matching, resolution, exclusions, watcher
@@ -629,7 +656,7 @@ exclusions, missing files, watcher state, nested/circular graphs, and duplicates
 
 **Goal:** Move FLS/AUX parsing and workflows to `auxiliaries.ts`.
 
-**Files affected:** `cache/auxiliaries.ts`, `cache/cache.ts`, and
+**Files affected:** `cache/auxiliaries.ts`, `src/core/cache.ts`, and
 `cache-auxiliaries.test.ts`.
 
 **Behavior policy:** Preserve all existing FLS filtering, child ordering,
@@ -655,36 +682,36 @@ inputs, non-TeX inputs, AUX bibliography registration, and empty bibdata.
 
 **Rollback point:** The completed Phase 3 commit.
 
-### [ ] Phase 5: Verify the public facade
+### [ ] Phase 5: Verify the public cache module
 
 **Status:** Not started.
 
-**Goal:** Isolate and verify the production singleton's exact export and global
-lifecycle wiring after Phase 1 reduced the facade implementation.
+**Goal:** Verify the coordinator exports, production singleton, and global
+lifecycle wiring after the post-Phase 1.5 consolidation.
 
-**Files affected:** `cache-facade.test.ts`, `cache.test.ts`, and only if a wiring
+**Files affected:** `cache-lifecycle.test.ts`, `cache.test.ts`, and only if a wiring
 defect is found, `src/core/cache.ts`.
 
 **Behavior policy:** Preserve watcher-change refresh, watcher-delete removal,
 watcher resets, and extension disposal behavior.
 
 **Implementation notes:** Move the import-time listener characterization tests
-from `cache.test.ts` to `cache-facade.test.ts`. Verify that the facade exports
-only `cache`, that the production constructor owns source change/delete
-subscriptions, and that the facade passes the singleton to `lw.onDispose`.
-Test-created instances must be disposed after each test.
+from `cache.test.ts` to `cache-lifecycle.test.ts`. Verify that the module exports
+`Cache` and `cache`, that the production constructor owns source change/delete
+subscriptions, and that the statement after singleton creation passes it to
+`lw.onDispose`. Test-created instances must be disposed after each test.
 
-**Required comments:** Explain why subscription ownership stays in `Cache` while
-extension-lifecycle ownership stays in the facade.
+**Required comments:** Explain why each instance owns its subscriptions while
+only the production instance is registered with the extension lifecycle.
 
 **Tests to move/add:** Singleton identity, exact export surface, source change,
 source delete, and extension disposal wiring.
 
-**Coverage evidence:** Pending for facade and all internal files.
+**Coverage evidence:** Pending for the public cache module and all internal files.
 
 **Verification commands:** Standard Node 20 verification suite.
 
-**Suggested commit boundary:** Facade reduction and facade tests only.
+**Suggested commit boundary:** Cache-module lifecycle tests only.
 
 **Rollback point:** The completed Phase 4 commit.
 
@@ -695,10 +722,10 @@ source delete, and extension disposal wiring.
 **Goal:** Establish the target one-way coordination flow:
 
 ```text
-facade -> Cache -> store/dependencies/bibliography/auxiliaries
+cache module -> Cache -> store/dependencies/bibliography/auxiliaries
 ```
 
-**Files affected:** `cache/cache.ts`, `cache/dependencies.ts`,
+**Files affected:** `src/core/cache.ts`, `cache/dependencies.ts`,
 `cache/auxiliaries.ts`, and their tests.
 
 **Behavior policy:** Preserve externally visible behavior. Change only internal
@@ -729,7 +756,7 @@ coordinator's application of them.
 
 **Goal:** Implement the approved behavior described above.
 
-**Files affected:** Primarily `cache/cache.ts`, `cache/store.ts`, and focused
+**Files affected:** Primarily `src/core/cache.ts`, `cache/store.ts`, and focused
 tests; dependency files may change for identity and de-duplication.
 
 **Behavior policy:** This is the only broad semantic-change phase. Prefer several
@@ -764,7 +791,7 @@ semantic commit.
 
 **Goal:** Complete the two approved public API exceptions.
 
-**Files affected:** `cache/cache.ts`, `src/core/cache.ts` if required, cache tests,
+**Files affected:** `src/core/cache.ts`, cache tests,
 and any TypeScript callers affected by the normalized signatures.
 
 **Behavior policy:** Do not change runtime behavior beyond removing external
@@ -811,7 +838,7 @@ than syntax.
 **Tests to move/add:** Full cache suite and full repository regression suite.
 
 **Coverage evidence:** Record the final per-file table with 100% statements,
-branches, functions, and lines for the facade and every internal file.
+branches, functions, and lines for the public cache module and every internal file.
 
 **Verification commands:** Node 20 setup, clean compile, relevant tests, full
 tests, scoped c8 command, lint, and a final public-API repository search.
@@ -825,7 +852,8 @@ tests, scoped c8 command, lint, and a final public-API repository search.
 The migration is complete only when:
 
 - every phase is checked and has recorded coverage evidence;
-- `src/core/cache.ts` exports only the production `cache` singleton;
+- `src/core/cache.ts` exports the `Cache` class and production `cache` singleton,
+  while production consumers continue to use `cache`;
 - every `Cache` instance owns independent mutable state;
 - every `Cache` instance owns and disposes its watcher subscriptions, and all
   non-production instances are disposed by their tests;

@@ -5,7 +5,7 @@ import { createRequire } from 'module'
 import * as sinon from 'sinon'
 import { assert, get, log, mock, set, sleep } from '../utils'
 import { lw } from '../../../src/lw'
-import { Cache } from '../../../src/core/cache/cache'
+import { Cache } from '../../../src/core/cache'
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     const fixture = get.fixture(__filename)
@@ -44,10 +44,10 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     })
 
     describe('import-time source watcher listeners', () => {
-        it('should capture the facade singleton in every external callback', () => {
+        it('should capture the production singleton in every external callback', () => {
             const testRequire = createRequire(__filename)
-            const facadePath = testRequire.resolve('../../../src/core/cache')
-            const cachedFacade = testRequire.cache[facadePath]
+            const cacheModulePath = testRequire.resolve('../../../src/core/cache')
+            const cachedCacheModule = testRequire.cache[cacheModulePath]
             const changeDisposeSpy = sinon.spy()
             const deleteDisposeSpy = sinon.spy()
             const onChangeStub = sinon.stub(lw.watcher.src, 'onChange').returns(new vscode.Disposable(changeDisposeSpy))
@@ -55,15 +55,15 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const onDisposeStub = lw.onDispose as sinon.SinonStub
             onDisposeStub.resetHistory()
 
-            // Reload the facade while registrations are intercepted so this
+            // Reload the cache module while registrations are intercepted so this
             // test can exercise its private callbacks without exporting them.
-            delete testRequire.cache[facadePath]
+            delete testRequire.cache[cacheModulePath]
             try {
-                const isolatedFacade = testRequire(facadePath) as typeof import('../../../src/core/cache')
+                const isolatedCacheModule = testRequire(cacheModulePath) as typeof import('../../../src/core/cache')
                 const changeCallback = onChangeStub.firstCall.args[0] as (uri: vscode.Uri) => void
                 const deleteCallback = onDeleteStub.firstCall.args[0] as (uri: vscode.Uri) => void
                 const disposable = onDisposeStub.firstCall.args[0] as vscode.Disposable
-                const resetStub = sinon.stub(isolatedFacade.cache, 'reset')
+                const resetStub = sinon.stub(isolatedCacheModule.cache, 'reset')
                 const unsupportedUri = vscode.Uri.file('/dev/null')
 
                 changeCallback(unsupportedUri)
@@ -74,9 +74,9 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 sinon.assert.calledOnce(changeDisposeSpy)
                 sinon.assert.calledOnce(deleteDisposeSpy)
             } finally {
-                delete testRequire.cache[facadePath]
-                if (cachedFacade) {
-                    testRequire.cache[facadePath] = cachedFacade
+                delete testRequire.cache[cacheModulePath]
+                if (cachedCacheModule) {
+                    testRequire.cache[cacheModulePath] = cachedCacheModule
                 }
                 onChangeStub.restore()
                 onDeleteStub.restore()
