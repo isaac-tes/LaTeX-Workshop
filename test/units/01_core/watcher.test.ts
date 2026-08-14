@@ -83,15 +83,42 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const handler = sinon.spy()
             const mainUri = vscode.Uri.file(get.path(fixture, 'main.tex'))
             const anotherUri = vscode.Uri.file(get.path(fixture, 'another.tex'))
-            lw.watcher.src.onCreate(handler)
+            const subscription = lw.watcher.src.onCreate(handler)
 
-            lw.watcher.src.add(mainUri)
-            lw.watcher.src.add(anotherUri)
-            getOnCreateHandlers().delete(handler)
+            try {
+                lw.watcher.src.add(mainUri)
+                lw.watcher.src.add(anotherUri)
 
-            sinon.assert.calledTwice(handler)
-            sinon.assert.calledWith(handler, mainUri)
-            sinon.assert.calledWith(handler, anotherUri)
+                sinon.assert.calledTwice(handler)
+                sinon.assert.calledWith(handler, mainUri)
+                sinon.assert.calledWith(handler, anotherUri)
+            } finally {
+                subscription.dispose()
+            }
+        })
+    })
+
+    describe('lw.watcher handler subscriptions', () => {
+        it('should unregister only through the returned disposables, not reset', () => {
+            const createHandler = sinon.spy()
+            const changeHandler = sinon.spy()
+            const deleteHandler = sinon.spy()
+            const subscriptions = [
+                lw.watcher.src.onCreate(createHandler),
+                lw.watcher.src.onChange(changeHandler),
+                lw.watcher.src.onDelete(deleteHandler)
+            ]
+
+            lw.watcher.src.reset()
+            assert.ok(getOnCreateHandlers().has(createHandler))
+            assert.ok(getOnChangeHandlers().has(changeHandler))
+            assert.ok(getOnDeleteHandlers().has(deleteHandler))
+
+            subscriptions.forEach(subscription => { subscription.dispose() })
+            subscriptions.forEach(subscription => { subscription.dispose() })
+            assert.ok(!getOnCreateHandlers().has(createHandler))
+            assert.ok(!getOnChangeHandlers().has(changeHandler))
+            assert.ok(!getOnDeleteHandlers().has(deleteHandler))
         })
     })
 
@@ -158,15 +185,16 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     describe('lw.watcher.src.onDidChange', () => {
         const stub = sinon.stub()
         const handler = (filePath: vscode.Uri) => { stub(filePath.fsPath) }
+        let subscription: vscode.Disposable
 
         beforeEach(() => {
             stub.reset()
-            lw.watcher.src.onChange(handler)
+            subscription = lw.watcher.src.onChange(handler)
         })
 
         afterEach(() => {
             lw.watcher.src.reset()
-            getOnChangeHandlers().delete(handler)
+            subscription.dispose()
         })
 
         it('should call onChangeHandlers when creating watched file', async () => {
@@ -228,16 +256,17 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     describe('lw.watcher.src.onDidDelete', () => {
         const stub = sinon.stub()
         const handler = (filePath: vscode.Uri) => { stub(filePath.fsPath) }
+        let subscription: vscode.Disposable
 
         beforeEach(() => {
             stub.reset()
-            lw.watcher.src.onDelete(handler)
+            subscription = lw.watcher.src.onDelete(handler)
             set.config('latex.watch.delay', 100)
         })
 
         afterEach(() => {
             lw.watcher.src.reset()
-            getOnDeleteHandlers().delete(handler)
+            subscription.dispose()
         })
 
         it('should call onDeleteHandlers when deleting watched file', async () => {

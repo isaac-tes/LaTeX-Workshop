@@ -48,8 +48,10 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const testRequire = createRequire(__filename)
             const facadePath = testRequire.resolve('../../../src/core/cache')
             const cachedFacade = testRequire.cache[facadePath]
-            const onChangeStub = sinon.stub(lw.watcher.src, 'onChange')
-            const onDeleteStub = sinon.stub(lw.watcher.src, 'onDelete')
+            const changeDisposeSpy = sinon.spy()
+            const deleteDisposeSpy = sinon.spy()
+            const onChangeStub = sinon.stub(lw.watcher.src, 'onChange').returns(new vscode.Disposable(changeDisposeSpy))
+            const onDeleteStub = sinon.stub(lw.watcher.src, 'onDelete').returns(new vscode.Disposable(deleteDisposeSpy))
             const onDisposeStub = lw.onDispose as sinon.SinonStub
             onDisposeStub.resetHistory()
 
@@ -69,6 +71,8 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 disposable.dispose()
 
                 sinon.assert.calledOnce(resetStub)
+                sinon.assert.calledOnce(changeDisposeSpy)
+                sinon.assert.calledOnce(deleteDisposeSpy)
             } finally {
                 delete testRequire.cache[facadePath]
                 if (cachedFacade) {
@@ -111,19 +115,21 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     })
 
     describe('Cache instances', () => {
-        it('should construct without registering process-wide listeners', () => {
+        it('should own watcher subscriptions without registering extension disposal', () => {
             const onChangeSpy = sinon.spy(lw.watcher.src, 'onChange')
             const onDeleteSpy = sinon.spy(lw.watcher.src, 'onDelete')
             const onDisposeStub = lw.onDispose as sinon.SinonStub
             onDisposeStub.resetHistory()
+            let instance: Cache | undefined
 
             try {
-                new Cache()
+                instance = new Cache()
 
-                sinon.assert.notCalled(onChangeSpy)
-                sinon.assert.notCalled(onDeleteSpy)
+                sinon.assert.calledOnce(onChangeSpy)
+                sinon.assert.calledOnce(onDeleteSpy)
                 sinon.assert.notCalled(onDisposeStub)
             } finally {
+                instance?.dispose()
                 onChangeSpy.restore()
                 onDeleteSpy.restore()
             }
@@ -135,18 +141,23 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const texPath = get.path(fixture, 'main.tex')
             const anotherPath = get.path(fixture, 'another.tex')
 
-            await first.refreshCache(texPath)
-            await second.refreshCache(anotherPath)
+            try {
+                await first.refreshCache(texPath)
+                await second.refreshCache(anotherPath)
 
-            assert.ok(first.get(texPath))
-            assert.strictEqual(second.get(texPath), undefined)
-            assert.strictEqual(first.get(anotherPath), undefined)
-            assert.ok(second.get(anotherPath))
-            assert.notStrictEqual(first.promises, second.promises)
+                assert.ok(first.get(texPath))
+                assert.strictEqual(second.get(texPath), undefined)
+                assert.strictEqual(first.get(anotherPath), undefined)
+                assert.ok(second.get(anotherPath))
+                assert.notStrictEqual(first.promises, second.promises)
 
-            first.reset()
-            assert.listStrictEqual(first.paths(), [])
-            assert.listStrictEqual(second.paths(), [anotherPath])
+                first.reset()
+                assert.listStrictEqual(first.paths(), [])
+                assert.listStrictEqual(second.paths(), [anotherPath])
+            } finally {
+                first.dispose()
+                second.dispose()
+            }
         })
     })
 

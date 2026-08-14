@@ -8,7 +8,7 @@ new repository facts conflict with the plan or require a behavioral decision.
 Behavior outside the decisions recorded here must not be changed without a new
 review.
 
-Current status: **Phase 1 complete; Phase 2 not started.**
+Current status: **Phase 1.5 complete; Phase 2 not started.**
 
 The migration must remain incremental and reversible. Structural moves, test
 moves, and behavior changes belong in separate commits whenever practical.
@@ -22,7 +22,7 @@ moves, and behavior changes belong in separate commits whenever practical.
   handling into files with explicit responsibilities.
 - Preserve the production API throughout the structural migration.
 - Make every `Cache` instance own independent cache state, in-flight state,
-  refresh counters, and aggressive-refresh timers.
+  refresh counters, aggressive-refresh timers, and watcher subscriptions.
 - Reach 100% statements, branches, functions, and lines coverage for the facade
   and every file under `src/core/cache/`.
 - Document critical methods and non-obvious ordering, concurrency, recursion,
@@ -32,11 +32,13 @@ moves, and behavior changes belong in separate commits whenever practical.
 
 - Do not remove `lw` or introduce dependency injection in this refactoring.
   Internal modules may import `lw`, `vscode`, and the existing utility modules.
-- Do not refactor project-wide path handling, watcher APIs, or other core
-  modules.
+- Do not refactor project-wide path handling or other core modules. The only
+  approved watcher API change is returning disposables from handler
+  registration methods as recorded in Phase 1.5.
 - Do not support multiple production `Cache` instances. Extra instances exist
   for isolated unit tests; services reached through `lw`, including watchers,
-  remain shared globals.
+  remain shared globals. Every extra `Cache` instance must be disposed by its
+  test.
 - Do not add `src/core/cache/index.ts`.
 - Do not expose internal classes or helpers through the public facade.
 
@@ -61,8 +63,7 @@ test/units/01_core/cache-auxiliaries.test.ts
 ### Facade: `src/core/cache.ts`
 
 The facade imports `Cache`, creates the single production instance, registers
-the source-watcher and extension-disposal callbacks for that instance, and
-exports only:
+that disposable instance with the extension lifecycle, and exports only:
 
 ```ts
 export const cache = new Cache()
@@ -71,12 +72,10 @@ export const cache = new Cache()
 It must not re-export `Cache`, `CacheStore`, or internal helpers. Unit tests that
 need isolated instances import named exports directly from internal files.
 
-Global listener registration belongs in the facade. Constructing `new Cache()`
-must not subscribe to source watchers or extension lifecycle events. The current
-watcher subscription API does not return a disposable, so instance-level
-registration would leak handlers across tests. Register external callbacks with
-arrow functions that capture the production instance; do not bind every public
-method in the `Cache` constructor.
+The `Cache` constructor subscribes directly to `lw.watcher.src` and owns the
+returned disposables. It must not register itself with the extension lifecycle;
+the facade alone passes the production instance to `lw.onDispose`. Tests that
+construct additional instances must dispose them in `finally` or teardown.
 
 ### Coordinator: `cache/cache.ts`
 
@@ -92,6 +91,7 @@ Each instance owns:
 - its active-refresh count;
 - its generation/revision state;
 - its per-file aggressive-refresh timers;
+- its source-watcher subscriptions;
 - its disposed state.
 
 Completion parsing order remains explicit in `Cache`. Package parsing must stay
@@ -164,6 +164,7 @@ getIncludedGlossaryBib(filePath?: string): string[]
 getFlsChildren(texFile: string): Promise<string[]>
 wait(filePath: string, seconds?: number): Promise<void>
 reset(): void
+dispose(): void
 refreshCache(filePath: string, rootPath?: string): Promise<void>
 refreshCacheAggressive(filePath: string): void
 loadFlsFile(filePath: string): Promise<void>
@@ -316,7 +317,7 @@ At minimum, add design comments for:
 
 Tests remain flat under `test/units/01_core/`:
 
-- `cache-facade.test.ts`: singleton export and global watcher/disposal wiring;
+- `cache-facade.test.ts`: singleton export and extension-disposal wiring;
 - `cache.test.ts`: `Cache` orchestration and public behavior;
 - `cache-store.test.ts`: isolated `CacheStore` behavior;
 - `cache-dependencies.test.ts`: input/XR discovery and TeX graph traversal;
@@ -471,13 +472,14 @@ normal module resolution. Use a no-argument constructor. `CacheStore` owns only
 cached values and the in-flight promise map; `Cache` owns its active-refresh
 counter and the current single aggressive-refresh timer. Retain the deprecated
 `promises` compatibility getter with its existing mutable `Map` type. Do not
-register global listeners in the constructor. Moving all implementation into
-the class necessarily reduces the facade to singleton creation and global
-lifecycle wiring in this phase; do not retain forwarding wrappers solely to
-defer that structural result to Phase 5.
+register global listeners in the constructor at this phase boundary. Moving all
+implementation into the class necessarily reduces the facade to singleton
+creation and global lifecycle wiring in this phase; do not retain forwarding
+wrappers solely to defer that structural result to Phase 5. Phase 1.5 explicitly
+supersedes the listener-ownership decision after making subscriptions disposable.
 
 **Required comments:** Explain refresh phase order, completion order, waiting,
-and the reason instance construction has no listener side effects.
+and the listener ownership used at this phase boundary.
 
 **Tests to move/add:** Isolated instance-state tests and all `CacheStore` branch
 tests. `cache-store.test.ts` constructs data in memory and does not use a fixture.
@@ -512,6 +514,55 @@ scoped c8 command under Node 20.
 
 **Rollback point:** The Phase 0 baseline commit.
 
+### [x] Phase 1.5: Make watcher subscriptions disposable
+
+**Status:** Complete on 2026-08-14.
+
+**Goal:** Give watcher handler registrations explicit lifetimes and let every
+`Cache` instance own its source-change and source-delete subscriptions.
+
+**Files affected:** `core/watcher.ts`, `core/cache.ts`, `cache/cache.ts`,
+`watcher.test.ts`, `cache.test.ts`, and this migration document.
+
+**Behavior policy:** Preserve watcher dispatch, handler de-duplication, reset,
+cache refresh, and cache deletion behavior. Existing watcher consumers may
+ignore the newly returned disposable.
+
+**Implementation notes:** `Watcher.onCreate`, `onChange`, and `onDelete` return
+a `vscode.Disposable` that removes only the registered handler. `Watcher.reset`
+continues to dispose filesystem watchers without clearing handler subscriptions.
+The no-argument `Cache` constructor registers directly with `lw.watcher.src` and
+combines both subscriptions. `Cache.dispose()` releases them before performing
+the existing reset cleanup. Before Phase 7, disposal does not yet introduce the
+final permanent disposed-state behavior.
+
+**Required comments:** Explain the separate lifetimes of filesystem watcher
+state, handler subscriptions, cache reset, and cache disposal.
+
+**Tests to move/add:** Cover all three returned handler disposables, idempotent
+disposal, subscription survival across watcher reset, Cache registration and
+cleanup, and facade extension-disposal ownership. Every test-created `Cache`
+must be disposed.
+
+**Coverage evidence:** The final scoped c8 run reported statements **100%**,
+branches **100%**, functions **100%**, and lines **100%** separately for
+`src/core/watcher.ts`, `src/core/cache.ts`, `src/core/cache/cache.ts`, and
+`src/core/cache/store.ts`. The aggregate row also reported 100% for all four
+metrics.
+
+**Verification evidence:** All commands ran with Node `v20.20.2`. ESLint passed
+for every changed TypeScript file. Both `tsc -p tsconfig.json` and
+`tsc -p viewer/tsconfig.json` passed. The focused cache/watcher suite passed with
+**131 passing**; the full suite and final scoped coverage run passed with **1114
+passing**.
+
+**Verification commands:** Standard Node 20 verification suite, focused watcher
+and cache tests, full tests, and scoped per-file 100% coverage.
+
+**Suggested commit boundary:** Watcher subscription lifecycle only.
+
+**Rollback point:** The completed Phase 1 commit.
+
 ### [ ] Phase 2: Extract dependency handling
 
 **Status:** Not started.
@@ -540,7 +591,7 @@ missing/root files, circular graphs, duplicates, and default-root traversal.
 
 **Suggested commit boundary:** Dependency extraction only.
 
-**Rollback point:** The completed Phase 1 commit.
+**Rollback point:** The completed Phase 1.5 commit.
 
 ### [ ] Phase 3: Extract bibliography handling
 
@@ -619,11 +670,12 @@ watcher resets, and extension disposal behavior.
 
 **Implementation notes:** Move the import-time listener characterization tests
 from `cache.test.ts` to `cache-facade.test.ts`. Verify that the facade exports
-only `cache`, that it retains source change/delete and `lw.onDispose` wiring,
-and that construction of test instances remains free of listener side effects.
+only `cache`, that the production constructor owns source change/delete
+subscriptions, and that the facade passes the singleton to `lw.onDispose`.
+Test-created instances must be disposed after each test.
 
-**Required comments:** Explain why listener ownership stays in the facade while
-the watcher API lacks disposable subscriptions.
+**Required comments:** Explain why subscription ownership stays in `Cache` while
+extension-lifecycle ownership stays in the facade.
 
 **Tests to move/add:** Singleton identity, exact export surface, source change,
 source delete, and extension disposal wiring.
@@ -775,7 +827,8 @@ The migration is complete only when:
 - every phase is checked and has recorded coverage evidence;
 - `src/core/cache.ts` exports only the production `cache` singleton;
 - every `Cache` instance owns independent mutable state;
-- global listeners are registered only for the facade singleton;
+- every `Cache` instance owns and disposes its watcher subscriptions, and all
+  non-production instances are disposed by their tests;
 - the one-way internal coordination flow is in place;
 - all approved concurrency, lifecycle, error, path, and dependency semantics are
   covered by tests;

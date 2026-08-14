@@ -14,16 +14,26 @@ import { CacheStore } from './store'
 const logger = lw.log('Cacher')
 
 /**
- * Coordinates one independent cache state. Construction deliberately avoids
- * global listener registration so tests can create instances without leaking
- * callbacks; the production facade owns that process-wide wiring.
+ * Coordinates one independent cache state and its source-watcher subscriptions.
+ * Every constructed instance must be disposed when its lifetime ends so its
+ * callbacks cannot outlive the instance.
  */
-export class Cache {
+export class Cache implements vscode.Disposable {
     private readonly store = new CacheStore()
+    private readonly watcherSubscription: vscode.Disposable
     /** Coordinates the single outline reconstruction after current refreshes finish. */
     private cachingFilesCount = 0
     /** Preserves the current one-timer aggressive refresh debounce behavior. */
     private updateCompleter!: NodeJS.Timeout
+
+    constructor() {
+        // Cache owns exactly the subscriptions that target this instance. This
+        // keeps watcher behavior private while allowing tests to tear instances down.
+        this.watcherSubscription = vscode.Disposable.from(
+            lw.watcher.src.onChange(uri => this.handleWatchedFileChange(uri)),
+            lw.watcher.src.onDelete(uri => this.handleWatchedFileDelete(uri))
+        )
+    }
 
     /**
      * Compatibility access to the mutable in-flight map. New code should rely
@@ -36,19 +46,19 @@ export class Cache {
         return this.store.promises
     }
 
-    /** @internal Connects the facade's source-change listener to one instance. */
-    static handleWatchedFileChange(cache: Cache, uri: vscode.Uri): void {
+    /** Handles a source change delivered by this instance's watcher subscription. */
+    private handleWatchedFileChange(uri: vscode.Uri): void {
         const filePath = uri.fsPath
-        if (cache.canCache(filePath)) {
-            void cache.refreshCache(filePath)
+        if (this.canCache(filePath)) {
+            void this.refreshCache(filePath)
         }
     }
 
-    /** @internal Connects the facade's source-deletion listener to one instance. */
-    static handleWatchedFileDelete(cache: Cache, uri: vscode.Uri): void {
+    /** Handles a source deletion delivered by this instance's watcher subscription. */
+    private handleWatchedFileDelete(uri: vscode.Uri): void {
         const filePath = uri.fsPath
-        if (cache.get(filePath) !== undefined) {
-            cache.store.delete(filePath)
+        if (this.get(filePath) !== undefined) {
+            this.store.delete(filePath)
             logger.log(`Removed ${filePath} .`)
         }
     }
@@ -173,6 +183,16 @@ export class Cache {
             }
         }
         return this.promises.get(filePath)
+    }
+
+    /**
+     * Releases this instance's watcher subscriptions, then performs the same
+     * state cleanup as reset. Reset itself keeps subscriptions so a live cache
+     * remains reusable.
+     */
+    dispose(): void {
+        this.watcherSubscription.dispose()
+        this.reset()
     }
 
     /**
