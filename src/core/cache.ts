@@ -8,7 +8,7 @@ import { lw } from '../lw'
 import type { FileCache } from '../types'
 
 import * as utils from '../utils/utils'
-import { InputFileRegExp } from '../utils/inputfilepath'
+import * as dependencies from './cache/dependencies'
 import { CacheStore } from './cache/store'
 
 const logger = lw.log('Cacher')
@@ -20,6 +20,13 @@ const logger = lw.log('Cacher')
  */
 export class Cache implements vscode.Disposable {
     private readonly store = new CacheStore()
+    private readonly dependencyContext: dependencies.DependencyContext = {
+        getCache: filePath => this.get(filePath),
+        watchSource: filePath => this.add(filePath),
+        refreshSource: (filePath, rootPath) => {
+            void this.refreshCache(filePath, rootPath)
+        }
+    }
     private readonly watcherSubscription: vscode.Disposable
     /** Coordinates the single outline reconstruction after current refreshes finish. */
     private cachingFilesCount = 0
@@ -259,8 +266,8 @@ export class Cache implements vscode.Disposable {
         // Preserve the current non-atomic lifecycle: callers can observe this
         // partial entry while child, AST, and completion parsing are still running.
         this.store.set(filePath, fileCache)
-        rootPath = rootPath || lw.root.file.path
-        await this.updateChildren(fileCache, rootPath)
+        const dependencyRoot = rootPath || lw.root.file.path || fileCache.filePath
+        await dependencies.updateDependencies(fileCache, dependencyRoot, this.dependencyContext)
 
         // Same-file refreshes currently run concurrently and replace this shared
         // map entry. Any task's finally handler may therefore clear a newer task;
@@ -339,121 +346,6 @@ export class Cache implements vscode.Disposable {
         fileCache.ast = await lw.parser.parse.tex(fileCache.contentTrimmed)
         const elapsed = performance.now() - start
         logger.log(`Parsed LaTeX AST in ${elapsed.toFixed(2)} ms: ${fileCache.filePath} .`)
-    }
-
-    /**
-     * Updates the children elements of a file cache, considering a root path.
-     *
-     * This function updates the children of a given file cache by processing input
-     * and cross-references. It first sets the root path to either the provided root
-     * path or the file path from the file cache. It then calls
-     * `updateChildrenInput` to handle the input elements and `updateChildrenXr` to
-     * manage cross-references within the file cache.
-     *
-     * @param {FileCache} fileCache - The file cache object to be updated.
-     * @param {string | undefined} rootPath - The root path to be used for updating
-     * children elements.
-     */
-    private async updateChildren(fileCache: FileCache, rootPath: string | undefined): Promise<void> {
-        rootPath = rootPath || fileCache.filePath
-        await this.updateChildrenInput(fileCache, rootPath)
-        await this.updateChildrenXr(fileCache, rootPath)
-        logger.log(`Updated inputs of ${fileCache.filePath} .`)
-    }
-
-    /**
-     * Updates the children of a file cache by parsing input file references.
-     *
-     * This function iterates over the trimmed content of a given file cache to
-     * identify and process input file references. It uses a regular expression to
-     * find these references and checks if the referenced files exist and are not
-     * the same as the root path. Valid input files are added to the children array
-     * of the file cache, and a log message is generated for each identified input
-     * file. If the input file is not already being watched, it is added to the
-     * watcher and its cache is refreshed.
-     *
-     * @param {FileCache} fileCache - The file cache object containing the content
-     * and metadata of the file being processed.
-     * @param {string} rootPath - The root path used for resolving relative input
-     * file paths.
-     */
-    private async updateChildrenInput(fileCache: FileCache, rootPath: string) {
-        const inputFileRegExp = new InputFileRegExp()
-        while (true) {
-            const result = await inputFileRegExp.exec(fileCache.contentTrimmed, fileCache.filePath, rootPath)
-            if (!result) {
-                break
-            }
-
-            if (!(await lw.file.exists(result.path)) || path.relative(result.path, rootPath) === '') {
-                continue
-            }
-
-            if (fileCache.children.some(child => child.filePath === result.path)) {
-                continue
-            }
-
-            fileCache.children.push({
-                index: result.match.index,
-                filePath: result.path
-            })
-            logger.log(`Input ${result.path} from ${fileCache.filePath} .`)
-
-            if (lw.watcher.src.has(lw.file.toUri(result.path))) {
-                continue
-            }
-            this.add(result.path)
-            void this.refreshCache(result.path, rootPath)
-        }
-    }
-
-    /**
-     * Updates the children references in the file cache based on \externaldocument
-     * macros.
-     *
-     * This function parses the trimmed content of a file to find any
-     * `\externaldocument` macros, which reference external documents. It then
-     * resolves the paths of these external documents relative to the current file
-     * path, root path, and additional LaTeX directories configured in the
-     * workspace. If an external document path is resolved and exists, it updates
-     * the root cache with the external document reference and logs the action. If
-     * the external document is already being watched, it continues; otherwise, it
-     * adds the document to the watcher and refreshes its cache.
-     *
-     * @param {FileCache} fileCache - The cache object of the file being processed.
-     * @param {string} rootPath - The root path to be used for resolving external
-     * document paths.
-     */
-    private async updateChildrenXr(fileCache: FileCache, rootPath: string) {
-        const externalDocRegExp = /\\externaldocument(?:\[(.*?)\])?\{(.*?)\}/g
-        while (true) {
-            const result = externalDocRegExp.exec(fileCache.contentTrimmed)
-            if (!result) {
-                break
-            }
-
-            const texDirs = vscode.workspace.getConfiguration('latex-workshop').get('latex.texDirs') as string[]
-            const externalPath = await utils.resolveFile([path.dirname(fileCache.filePath), path.dirname(rootPath), ...texDirs], result[2])
-            if (!externalPath || !(await lw.file.exists(externalPath)) || path.relative(externalPath, rootPath) === '') {
-                logger.log(
-                    `Failed resolving external ${result[2]} . Tried ${externalPath} ` +
-                        (externalPath && path.relative(externalPath, rootPath) === '' ? ', which is root.' : '.')
-                )
-                continue
-            }
-
-            const rootCache = this.get(rootPath)
-            if (rootCache !== undefined) {
-                rootCache.external[externalPath] = result[1] || ''
-                logger.log(`External document ${externalPath} from ${fileCache.filePath} .` + (result[1] ? ` Prefix is ${result[1]}` : ''))
-            }
-
-            if (lw.watcher.src.has(lw.file.toUri(externalPath))) {
-                continue
-            }
-            this.add(externalPath)
-            void this.refreshCache(externalPath, externalPath)
-        }
     }
 
     /**
@@ -818,23 +710,7 @@ export class Cache implements vscode.Disposable {
      * @returns {string[]} - An array of paths to included TeX files.
      */
     getIncludedTeX(filePath?: string, includedTeX = new Set<string>()): Set<string> {
-        filePath = filePath ?? lw.root.file.path
-        if (filePath === undefined) {
-            return includedTeX
-        }
-        const fileCache = this.get(filePath)
-        if (fileCache === undefined) {
-            return includedTeX
-        }
-        includedTeX.add(filePath)
-        for (const child of fileCache.children) {
-            if (includedTeX.has(child.filePath)) {
-                // Already included
-                continue
-            }
-            this.getIncludedTeX(child.filePath, includedTeX)
-        }
-        return includedTeX
+        return dependencies.getIncludedTeX(filePath ?? lw.root.file.path, this.dependencyContext, includedTeX)
     }
 
     /**

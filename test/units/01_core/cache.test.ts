@@ -6,6 +6,7 @@ import * as sinon from 'sinon'
 import { assert, get, log, mock, set, sleep } from '../utils'
 import { lw } from '../../../src/lw'
 import { Cache } from '../../../src/core/cache'
+import * as dependencies from '../../../src/core/cache/dependencies'
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     const fixture = get.fixture(__filename)
@@ -388,11 +389,31 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.listStrictEqual(lw.cache.paths(), [texPath])
         })
 
-        it('should update children during caching', async () => {
+        it('should coordinate dependency updates with the owning instance', async () => {
             const texPath = get.path(fixture, 'main.tex')
+            const instance = new Cache()
+            const updateStub = sinon.stub(dependencies, 'updateDependencies').resolves()
 
-            await lw.cache.refreshCache(texPath)
-            assert.hasLog('Updated inputs of ')
+            try {
+                await instance.refreshCache(texPath)
+                const [fileCache, rootPath, context] = updateStub.firstCall.args
+                assert.strictEqual(fileCache.filePath, texPath)
+                assert.strictEqual(rootPath, texPath)
+
+                const getSpy = sinon.spy(instance, 'get')
+                const addStub = sinon.stub(instance, 'add')
+                const refreshStub = sinon.stub(instance, 'refreshCache').resolves()
+                assert.strictEqual(context.getCache(texPath), fileCache)
+                context.watchSource(texPath)
+                context.refreshSource(texPath, rootPath)
+
+                sinon.assert.calledOnceWithExactly(getSpy, texPath)
+                sinon.assert.calledOnceWithExactly(addStub, texPath)
+                sinon.assert.calledOnceWithExactly(refreshStub, texPath, rootPath)
+            } finally {
+                updateStub.restore()
+                instance.dispose()
+            }
         })
 
         it('should update AST during caching', async () => {
@@ -689,236 +710,6 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             await lw.cache.refreshCache(texPath)
             assert.hasLog(`Parse LaTeX AST: ${texPath} .`)
             assert.strictEqual((lw.parser.parse.tex as sinon.SinonStub).callCount, 1)
-        })
-    })
-
-    describe('lw.cache.updateChildrenInput', () => {
-        it('should not add any children if there is nothing', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-
-            lw.cache.add(texPath)
-            await lw.cache.refreshCache(texPath)
-            assert.listStrictEqual(lw.cache.get(texPath)?.children, [])
-        })
-
-        it('should not add a child if the files does not exist', async () => {
-            const toParse = get.path(fixture, 'update_children', 'file_not_exist.tex')
-
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            assert.listStrictEqual(lw.cache.get(toParse)?.children, [])
-        })
-
-        it('should not add a child if it is the root', async () => {
-            const toParse = get.path(fixture, 'update_children', 'input_main.tex')
-
-            set.root(fixture, 'main.tex')
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            assert.listStrictEqual(lw.cache.get(toParse)?.children, [])
-        })
-
-        it('should add a child and cache it if not cached', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-            const toParse = get.path(fixture, 'update_children', 'input_main.tex')
-
-            set.root(fixture, 'another.tex')
-            assert.strictEqual(lw.cache.get(texPath), undefined)
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            assert.listStrictEqual(
-                lw.cache.get(toParse)?.children.map((child) => child.filePath),
-                [texPath]
-            )
-            await lw.cache.wait(texPath, 60)
-            assert.strictEqual(lw.cache.get(texPath)?.filePath, texPath)
-        })
-
-        it('should watch the child', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-            const toParse = get.path(fixture, 'update_children', 'input_main.tex')
-
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.wait(texPath, 60)
-            assert.ok(lw.watcher.src.has(vscode.Uri.file(texPath)))
-        })
-
-        it('should add two children if there are two inputs', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-            const texPathAnother = get.path(fixture, 'another.tex')
-            const toParse = get.path(fixture, 'update_children', 'two_inputs.tex')
-
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            await Promise.all([
-                lw.cache.wait(texPath, 60),
-                lw.cache.wait(texPathAnother, 60),
-            ])
-            assert.listStrictEqual(
-                lw.cache.get(toParse)?.children.map((child) => child.filePath),
-                [texPath, texPathAnother]
-            )
-        })
-
-        it('should add one child if two inputs are identical', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-            const toParse = get.path(fixture, 'update_children', 'two_same_inputs.tex')
-
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.wait(texPath, 60)
-            assert.listStrictEqual(
-                lw.cache.get(toParse)?.children.map((child) => child.filePath),
-                [texPath]
-            )
-        })
-    })
-
-    describe('lw.cache.updateChildrenXr', () => {
-        it('should not add any children if there is nothing', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-
-            lw.cache.add(texPath)
-            await lw.cache.refreshCache(texPath)
-            const fileCache = lw.cache.get(texPath)
-            assert.ok(fileCache)
-            assert.listStrictEqual(Object.keys(fileCache.external), [])
-        })
-
-        it('should not add a child if the files does not exist', async () => {
-            const toParse = get.path(fixture, 'update_children_xr', 'file_not_exist.tex')
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            const fileCache = lw.cache.get(toParse)
-            assert.ok(fileCache)
-            assert.listStrictEqual(Object.keys(fileCache.external), [])
-        })
-
-        it('should not add a child if it is the root', async () => {
-            const toParse = get.path(fixture, 'update_children_xr', 'input_main.tex')
-            set.root(fixture, 'main.tex')
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            const fileCache = lw.cache.get(toParse)
-            assert.ok(fileCache)
-            assert.listStrictEqual(Object.keys(fileCache.external), [])
-        })
-
-        it('should add a child to root instead of the current file', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-            const texPathAnother = get.path(fixture, 'another.tex')
-
-            set.root(texPathAnother)
-            lw.cache.add(texPathAnother)
-            await lw.cache.refreshCache(texPathAnother)
-
-            const toParse = get.path(fixture, 'update_children_xr', 'input_main.tex')
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.wait(texPath, 60)
-
-            let fileCache = lw.cache.get(texPathAnother)
-            assert.ok(fileCache)
-            assert.listStrictEqual(Object.keys(fileCache.external), [texPath])
-
-            fileCache = lw.cache.get(toParse)
-            assert.ok(fileCache)
-            assert.listStrictEqual(Object.keys(fileCache.external), [])
-        })
-
-        it('should add a child if it is next to the source', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-            const toParse = get.path(fixture, 'update_children_xr', 'input_main.tex')
-
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.wait(texPath, 60)
-            const fileCache = lw.cache.get(toParse)
-            assert.ok(fileCache)
-            assert.listStrictEqual(Object.keys(fileCache.external), [texPath])
-        })
-
-        it('should add a child if it is next to the root', async () => {
-            const rootPath = get.path(fixture, 'update_children_xr', 'sub', 'main.tex')
-            const externalPath = get.path(fixture, 'update_children_xr', 'sub', 'sub.tex')
-            set.root(rootPath)
-            lw.cache.add(rootPath)
-            await lw.cache.refreshCache(rootPath)
-
-            const toParse = get.path(fixture, 'update_children_xr', 'input_sub.tex')
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.wait(externalPath, 60)
-
-            const fileCache = lw.cache.get(rootPath)
-            assert.ok(fileCache)
-            assert.listStrictEqual(Object.keys(fileCache.external), [externalPath])
-        })
-
-        it('should add a child if it is defined in `latex.texDirs`', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-            const externalPath = get.path(fixture, 'update_children_xr', 'sub', 'sub.tex')
-
-            set.config('latex.texDirs', [get.path(fixture, 'update_children_xr', 'sub')])
-
-            set.root(texPath)
-            lw.cache.add(texPath)
-            await lw.cache.refreshCache(texPath)
-
-            const toParse = get.path(fixture, 'update_children_xr', 'input_sub.tex')
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.wait(externalPath, 60)
-
-            const fileCache = lw.cache.get(texPath)
-            assert.ok(fileCache)
-            assert.listStrictEqual(Object.keys(fileCache.external), [externalPath])
-        })
-
-        it('should add a child and cache it if not cached', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-
-            assert.strictEqual(lw.cache.get(texPath), undefined)
-
-            const toParse = get.path(fixture, 'update_children_xr', 'input_main.tex')
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.wait(texPath, 60)
-            assert.strictEqual(lw.cache.get(texPath)?.filePath, texPath)
-        })
-
-        it('should watch the child', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-            const toParse = get.path(fixture, 'update_children_xr', 'input_main.tex')
-
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.wait(texPath, 60)
-            assert.ok(lw.watcher.src.has(vscode.Uri.file(texPath)))
-        })
-
-        it('should add a child with prefix', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-            const toParse = get.path(fixture, 'update_children_xr', 'input_main_prefix.tex')
-
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.wait(texPath, 60)
-            const fileCache = lw.cache.get(toParse)
-            assert.ok(fileCache)
-            assert.strictEqual(fileCache.external[texPath], 'prefix')
-        })
-
-        it('should not recache an external document that is already watched', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-            const toParse = get.path(fixture, 'update_children_xr', 'input_main.tex')
-            lw.watcher.src.add(vscode.Uri.file(texPath))
-
-            await lw.cache.refreshCache(toParse)
-
-            assert.ok(lw.watcher.src.has(vscode.Uri.file(texPath)))
-            assert.strictEqual(lw.cache.get(texPath), undefined)
         })
     })
 
@@ -1221,6 +1012,21 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
     })
 
+    describe('lw.cache.getIncludedTeX coordination', () => {
+        it('should resolve the current root and forward the compatibility Set', () => {
+            const rootPath = set.root(fixture, 'main.tex')
+            const includedTeX = new Set(['/seed.tex'])
+            const includedStub = sinon.stub(dependencies, 'getIncludedTeX').returns(includedTeX)
+
+            const result = lw.cache.getIncludedTeX(undefined, includedTeX)
+            const [filePath, , forwardedSet] = includedStub.firstCall.args
+
+            assert.strictEqual(result, includedTeX)
+            assert.strictEqual(filePath, rootPath)
+            assert.strictEqual(forwardedSet, includedTeX)
+        })
+    })
+
     describe('lw.cache.getIncludedBib', () => {
         it('should return an empty list if no file path is given', () => {
             assert.listStrictEqual(lw.cache.getIncludedBib(), [])
@@ -1266,52 +1072,6 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             await lw.cache.refreshCache(toParse)
             assert.listStrictEqual(lw.cache.getIncludedBib(toParse), [bibPath])
-        })
-    })
-
-    describe('lw.cache.getIncludedTeX', () => {
-        it('should return an empty list if no file path is given', () => {
-            assert.strictEqual(lw.cache.getIncludedTeX().size, 0)
-        })
-
-        it('should return an empty list if the given file is not cached', () => {
-            const toParse = get.path(fixture, 'included_tex', 'main.tex')
-            assert.strictEqual(lw.cache.getIncludedTeX(toParse).size, 0)
-        })
-
-        it('should return a list of included .tex files', async () => {
-            const toParse = get.path(fixture, 'included_tex', 'main.tex')
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.wait(get.path(fixture, 'included_tex', 'another.tex'))
-            const includedFiles = lw.cache.getIncludedTeX(toParse)
-            assert.strictEqual(includedFiles.size, 2)
-            assert.ok(includedFiles.has(toParse))
-            assert.ok(includedFiles.has(get.path(fixture, 'included_tex', 'another.tex')))
-        })
-
-        it('should return a list of included .tex files with circular inclusions', async () => {
-            const toParse = get.path(fixture, 'included_tex', 'circular_1.tex')
-            const circularChild = get.path(fixture, 'included_tex', 'circular_2.tex')
-            lw.cache.add(toParse)
-            lw.cache.add(circularChild)
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.refreshCache(circularChild)
-            const includedFiles = lw.cache.getIncludedTeX(toParse)
-            assert.strictEqual(includedFiles.size, 2)
-            assert.ok(includedFiles.has(toParse))
-            assert.ok(includedFiles.has(get.path(fixture, 'included_tex', 'circular_2.tex')))
-        })
-
-        it('should return a list of de-duplicated .tex files', async () => {
-            const toParse = get.path(fixture, 'included_tex', 'duplicate_1.tex')
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.wait(get.path(fixture, 'included_tex', 'another.tex'))
-            const includedFiles = lw.cache.getIncludedTeX(toParse)
-            assert.strictEqual(includedFiles.size, 4)
-            assert.ok(includedFiles.has(get.path(fixture, 'included_tex', 'duplicate_1.tex')))
-            assert.ok(includedFiles.has(get.path(fixture, 'included_tex', 'duplicate_2.tex')))
-            assert.ok(includedFiles.has(get.path(fixture, 'included_tex', 'main.tex')))
-            assert.ok(includedFiles.has(get.path(fixture, 'included_tex', 'another.tex')))
         })
     })
 

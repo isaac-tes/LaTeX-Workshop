@@ -8,8 +8,7 @@ new repository facts conflict with the plan or require a behavioral decision.
 Behavior outside the decisions recorded here must not be changed without a new
 review.
 
-Current status: **Phase 1.5 and the coordinator consolidation are complete;
-Phase 2 not started.**
+Current status: **Phase 2 complete; Phase 3 not started.**
 
 The migration must remain incremental and reversible. Structural moves, test
 moves, and behavior changes belong in separate commits whenever practical.
@@ -122,12 +121,18 @@ TeX graph traversal, path de-duplication, and cycle prevention. Use functions
 and local types rather than another service class.
 
 During the behavior-preserving extraction, define `DependencyContext` in this
-file and pass callbacks such as `getCache`, `watchSource`, and `refreshSource`
-from `Cache`. This temporary callback-based side-effect model avoids importing
-the production singleton and therefore works with isolated `Cache` instances.
+file with exactly `getCache`, `watchSource`, and `refreshSource` callbacks from
+the owning `Cache`. Each `Cache` creates one immutable context using arrow
+wrappers that dynamically call its instance methods. This temporary
+callback-based side-effect model avoids importing the production singleton and
+therefore works with isolated `Cache` instances. The module may directly use
+`lw` for file I/O, configuration, watcher queries, and logging, but it must never
+access `lw.cache`.
 
-In a later phase, discovery functions return explicit discovery results. `Cache`
-then applies watcher and refresh side effects. Internal modules must not import
+Phase 6 removes `DependencyContext` completely: discovery functions return
+explicit results, and `Cache` applies cache mutations, watcher registration, and
+recursive refresh side effects. The included-TeX graph helper may still receive
+one standalone read-only cache lookup callback. Internal modules must not import
 each other to reach the production singleton.
 
 ### Bibliography: `cache/bibliography.ts`
@@ -162,7 +167,7 @@ compatible:
 add(filePath: string): void
 get(filePath: string): FileCache | undefined
 paths(): string[]
-getIncludedTeX(filePath?: string): Set<string>
+getIncludedTeX(filePath?: string, includedTeX?: Set<string>): Set<string>
 getIncludedBib(filePath?: string): string[]
 getIncludedGlossaryBib(filePath?: string): string[]
 getFlsChildren(texFile: string): Promise<string[]>
@@ -174,11 +179,13 @@ refreshCacheAggressive(filePath: string): void
 loadFlsFile(filePath: string): Promise<void>
 ```
 
-Two approved exceptions are part of this plan:
+Three approved exceptions are part of this plan, all applied in Phase 8:
 
 1. Normalize the misleading nested asynchronous return types to
    `Promise<void>`.
-2. Remove the test-only `promises` property after its tests have migrated to
+2. Remove the undocumented second `getIncludedTeX` accumulator argument and
+   keep traversal state private to `dependencies.ts`.
+3. Remove the test-only `promises` property after its tests have migrated to
    behavior-based assertions.
 
 During the compatibility period, expose `promises` through a getter with the
@@ -590,29 +597,49 @@ reported **100%** statements, branches, functions, and lines for
 
 **Rollback point:** The completed Phase 1.5 commit.
 
-### [ ] Phase 2: Extract dependency handling
+### [x] Phase 2: Extract dependency handling
 
-**Status:** Not started.
+**Status:** Complete on 2026-08-14.
 
 **Goal:** Move input, XR, and included-TeX graph logic to `dependencies.ts`.
 
 **Files affected:** `cache/dependencies.ts`, `src/core/cache.ts`, and
 `cache-dependencies.test.ts`.
 
-**Behavior policy:** Preserve immediate watcher registration and recursive
-refresh side effects.
+**Behavior policy:** Preserve immediate watcher registration, non-blocking
+recursive refresh side effects, input-before-XR scan order, exact-path
+de-duplication, root ownership, and already-watched short-circuit behavior. Do
+not modify `InputFileRegExp`.
 
-**Implementation notes:** Define `DependencyContext` in `dependencies.ts` and
-pass callbacks from the owning `Cache`. Never import or call the production
-singleton. This callback direction is an explicitly temporary migration bridge.
+**Implementation notes:** Export only `updateDependencies`, `getIncludedTeX`,
+and the `DependencyContext` type. Keep input and XR helpers private. Each
+`Cache` owns one readonly context whose arrow wrappers call `get`, `add`, and
+`refreshCache` dynamically; do not use `bind`. `Cache` resolves the dependency
+root as the explicit root, current global root, or current file before calling
+the module. Never import or call the production singleton. This callback
+direction is an explicitly temporary migration bridge removed in Phase 6.
 
 **Required comments:** Explain recursive scheduling, non-blocking child refresh,
 XR root ownership, ordering, de-duplication behavior, and cycle prevention.
 
-**Tests to move/add:** Input discovery, XR discovery, already-watched files,
-missing/root files, circular graphs, duplicates, and default-root traversal.
+**Tests to move/add:** Directly test input discovery, XR discovery,
+already-watched files, missing/root files, circular graphs, duplicates, and
+default-root traversal in `cache-dependencies.test.ts`. Keep one Cache
+coordination test. Characterize that `InputFileRegExp` exhausts input matches
+before noweb child matches and that an unresolved match can stop the scan; do
+not change either behavior in this phase.
 
-**Coverage evidence:** Pending for all implemented cache files.
+**Coverage evidence:** The final scoped c8 run reported statements **100%**,
+branches **100%**, functions **100%**, and lines **100%** separately for
+`src/core/cache.ts`, `src/core/cache/dependencies.ts`, and
+`src/core/cache/store.ts`. The aggregate row also reported 100% for all four
+metrics.
+
+**Verification evidence:** All commands ran with Node `v20.20.2`. ESLint passed
+for every changed TypeScript file. Both `tsc -p tsconfig.json` and
+`tsc -p viewer/tsconfig.json` passed. The final focused cache/dependency/watcher
+suite passed with **130 passing**; the full suite and final scoped coverage run
+passed with **1113 passing**.
 
 **Verification commands:** Standard Node 20 verification suite.
 
@@ -731,10 +758,11 @@ cache module -> Cache -> store/dependencies/bibliography/auxiliaries
 **Behavior policy:** Preserve externally visible behavior. Change only internal
 side-effect ownership.
 
-**Implementation notes:** Replace `watchSource` and `refreshSource` callback
-effects with typed discovery results. `Cache` applies mutations and schedules
-child work. Internal modules must not import each other or the production
-singleton.
+**Implementation notes:** Remove `DependencyContext` completely and replace its
+side-effect callbacks with typed discovery results. `Cache` applies mutations
+and schedules child work. `getIncludedTeX` may retain one standalone read-only
+cache lookup callback, which is not a side-effect context. Internal modules must
+not import each other or the production singleton.
 
 **Required comments:** Explain discovery result ownership and why parent refresh
 does not await the full recursive graph.
@@ -785,11 +813,11 @@ semantic commit.
 **Rollback point:** The completed Phase 6 commit, plus each independently passing
 semantic commit.
 
-### [ ] Phase 8: Remove `promises` and normalize async types
+### [ ] Phase 8: Clean up the public cache API
 
 **Status:** Not started.
 
-**Goal:** Complete the two approved public API exceptions.
+**Goal:** Complete the three approved public API exceptions.
 
 **Files affected:** `src/core/cache.ts`, cache tests,
 and any TypeScript callers affected by the normalized signatures.
@@ -799,7 +827,8 @@ mutable in-flight access.
 
 **Implementation notes:** Replace remaining tests of `cache.promises` with
 behavioral assertions, remove the deprecated getter, and use `Promise<void>` for
-`refreshCache` and `wait`.
+`refreshCache` and `wait`. Remove the second `getIncludedTeX` accumulator
+argument and keep its traversal Set private to `dependencies.ts`.
 
 **Required comments:** Public JSDoc must state final wait/refresh completion and
 error semantics.
