@@ -8,7 +8,7 @@ new repository facts conflict with the plan or require a behavioral decision.
 Behavior outside the decisions recorded here must not be changed without a new
 review.
 
-Current status: **Phase 0 complete; implementation not started.**
+Current status: **Phase 1 complete; Phase 2 not started.**
 
 The migration must remain incremental and reversible. Structural moves, test
 moves, and behavior changes belong in separate commits whenever practical.
@@ -74,7 +74,9 @@ need isolated instances import named exports directly from internal files.
 Global listener registration belongs in the facade. Constructing `new Cache()`
 must not subscribe to source watchers or extension lifecycle events. The current
 watcher subscription API does not return a disposable, so instance-level
-registration would leak handlers across tests.
+registration would leak handlers across tests. Register external callbacks with
+arrow functions that capture the production instance; do not bind every public
+method in the `Cache` constructor.
 
 ### Coordinator: `cache/cache.ts`
 
@@ -103,12 +105,11 @@ operations:
 
 - cached `FileCache` values;
 - in-flight task registration and lookup;
-- `get`, `set`, `delete`, `clear`, and `paths`;
-- counters or queue metadata that have no external side effects.
+- `get`, `set`, `delete`, `clear`, and `paths`.
 
 `CacheStore` must not access `lw`, reset watchers, log, emit events, refresh
-files, or implement timeout behavior. `Cache.wait()` remains orchestration in
-`Cache`.
+files, own refresh counters or timers, or implement timeout behavior.
+`Cache.wait()` remains orchestration in `Cache`.
 
 ### Dependencies: `cache/dependencies.ts`
 
@@ -322,6 +323,11 @@ Tests remain flat under `test/units/01_core/`:
 - `cache-bibliography.test.ts`: BibTeX/glossary discovery and traversal;
 - `cache-auxiliaries.test.ts`: FLS/AUX parsing and workflows.
 
+`cache-store.test.ts` uses only in-memory `FileCache` values and has no fixture
+directory. The dependency, bibliography, and auxiliary test files explicitly
+share `test/units/01_core/cache/`; they must not call `get.fixture(__filename)`,
+which would resolve to separate non-existent directories.
+
 Export only internal units with an independent contract. Use named exports such
 as `Cache`, `CacheStore`, pure FLS/AUX parsers, and graph traversal functions.
 Do not export every helper merely to make coverage easier; private branches are
@@ -444,9 +450,9 @@ full `npm run test`, and the scoped c8 command above.
 
 **Rollback point:** Revert the test-only commit.
 
-### [ ] Phase 1: Introduce `CacheStore` and `Cache`
+### [x] Phase 1: Introduce `CacheStore` and `Cache`
 
-**Status:** Not started.
+**Status:** Complete on 2026-08-14.
 
 **Goal:** Move instance state into `CacheStore` and public orchestration into a
 named-export `Cache` class without changing runtime behavior.
@@ -455,21 +461,49 @@ named-export `Cache` class without changing runtime behavior.
 `cache-store.test.ts`, and `cache.test.ts`.
 
 **Behavior policy:** Mechanical migration only. Keep current cache visibility,
-promise timing, counters, and debounce semantics.
+promise timing, counters, and debounce semantics. Public methods require normal
+receiver calls such as `cache.get(path)`; detached method calls are not part of
+the compatibility contract because no repository caller relies on them.
 
-**Implementation notes:** Use a no-argument constructor. Each instance owns its
-store, counter, and timer state. Retain the deprecated `promises` compatibility
-getter with its existing mutable `Map` type. Do not register global listeners in
-the constructor.
+**Implementation notes:** Keep the coordinator in `cache/cache.ts`; do not use
+`cache/index.ts`, which would be shadowed by the sibling public facade during
+normal module resolution. Use a no-argument constructor. `CacheStore` owns only
+cached values and the in-flight promise map; `Cache` owns its active-refresh
+counter and the current single aggressive-refresh timer. Retain the deprecated
+`promises` compatibility getter with its existing mutable `Map` type. Do not
+register global listeners in the constructor. Moving all implementation into
+the class necessarily reduces the facade to singleton creation and global
+lifecycle wiring in this phase; do not retain forwarding wrappers solely to
+defer that structural result to Phase 5.
 
 **Required comments:** Explain refresh phase order, completion order, waiting,
 and the reason instance construction has no listener side effects.
 
 **Tests to move/add:** Isolated instance-state tests and all `CacheStore` branch
-tests. Keep facade listener tests for Phase 5.
+tests. `cache-store.test.ts` constructs data in memory and does not use a fixture.
+Keep facade listener tests in `cache.test.ts` until Phase 5.
 
-**Coverage evidence:** Pending for `cache/cache.ts`, `cache/store.ts`, and the
-facade.
+**Implementation evidence:** `CacheStore` now owns cache entries and the
+in-flight map without importing `lw`. Every `Cache` owns one store, its refresh
+counter, and its aggressive-refresh timer. Public methods remain prototype
+methods and are called through their owning instance. Construction has no global
+listener side effects; the facade alone creates the production singleton and
+connects watcher/disposal callbacks with arrow functions that capture it. The
+existing concurrent, partial-cache, reset, deletion, debounce, and nested-Promise
+behavior remains characterized and unchanged. The isolated-instance test adds
+one identity assertion over two instances' deprecated `promises` getters;
+migrate it with the Phase 0 direct-map assertions in Phase 8.
+
+**Coverage evidence:** The scoped c8 run reported statements **100%**, branches
+**100%**, functions **100%**, and lines **100%** separately for
+`src/core/cache.ts`, `src/core/cache/cache.ts`, and `src/core/cache/store.ts`.
+The aggregate row also reported 100% for all four metrics.
+
+**Verification evidence:** All commands ran with Node `v20.20.2`. ESLint passed
+for every changed TypeScript file. Both `tsc -p tsconfig.json` and
+`tsc -p viewer/tsconfig.json` passed. The focused cache suite passed with **107
+passing**; the full suite and final scoped coverage run passed with **1113
+passing**.
 
 **Verification commands:** Standard compile, relevant tests, full tests, and
 scoped c8 command under Node 20.
@@ -570,21 +604,23 @@ inputs, non-TeX inputs, AUX bibliography registration, and empty bibdata.
 
 **Rollback point:** The completed Phase 3 commit.
 
-### [ ] Phase 5: Reduce the public facade
+### [ ] Phase 5: Verify the public facade
 
 **Status:** Not started.
 
-**Goal:** Make `src/core/cache.ts` only create/export the production singleton
-and connect it to global lifecycle events.
+**Goal:** Isolate and verify the production singleton's exact export and global
+lifecycle wiring after Phase 1 reduced the facade implementation.
 
-**Files affected:** `src/core/cache.ts` and `cache-facade.test.ts`.
+**Files affected:** `cache-facade.test.ts`, `cache.test.ts`, and only if a wiring
+defect is found, `src/core/cache.ts`.
 
 **Behavior policy:** Preserve watcher-change refresh, watcher-delete removal,
 watcher resets, and extension disposal behavior.
 
-**Implementation notes:** Export only `cache`. Register source change/delete and
-`lw.onDispose` in the facade. Construction of test instances remains free of
-listener side effects.
+**Implementation notes:** Move the import-time listener characterization tests
+from `cache.test.ts` to `cache-facade.test.ts`. Verify that the facade exports
+only `cache`, that it retains source change/delete and `lw.onDispose` wiring,
+and that construction of test instances remains free of listener side effects.
 
 **Required comments:** Explain why listener ownership stays in the facade while
 the watcher API lacks disposable subscriptions.

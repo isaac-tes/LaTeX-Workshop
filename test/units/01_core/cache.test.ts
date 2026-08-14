@@ -1,9 +1,11 @@
 import * as vscode from 'vscode'
 import os from 'os'
 import * as path from 'path'
+import { createRequire } from 'module'
 import * as sinon from 'sinon'
 import { assert, get, log, mock, set, sleep } from '../utils'
 import { lw } from '../../../src/lw'
+import { Cache } from '../../../src/core/cache/cache'
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     const fixture = get.fixture(__filename)
@@ -42,6 +44,41 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     })
 
     describe('import-time source watcher listeners', () => {
+        it('should capture the facade singleton in every external callback', () => {
+            const testRequire = createRequire(__filename)
+            const facadePath = testRequire.resolve('../../../src/core/cache')
+            const cachedFacade = testRequire.cache[facadePath]
+            const onChangeStub = sinon.stub(lw.watcher.src, 'onChange')
+            const onDeleteStub = sinon.stub(lw.watcher.src, 'onDelete')
+            const onDisposeStub = lw.onDispose as sinon.SinonStub
+            onDisposeStub.resetHistory()
+
+            // Reload the facade while registrations are intercepted so this
+            // test can exercise its private callbacks without exporting them.
+            delete testRequire.cache[facadePath]
+            try {
+                const isolatedFacade = testRequire(facadePath) as typeof import('../../../src/core/cache')
+                const changeCallback = onChangeStub.firstCall.args[0] as (uri: vscode.Uri) => void
+                const deleteCallback = onDeleteStub.firstCall.args[0] as (uri: vscode.Uri) => void
+                const disposable = onDisposeStub.firstCall.args[0] as vscode.Disposable
+                const resetStub = sinon.stub(isolatedFacade.cache, 'reset')
+                const unsupportedUri = vscode.Uri.file('/dev/null')
+
+                changeCallback(unsupportedUri)
+                deleteCallback(unsupportedUri)
+                disposable.dispose()
+
+                sinon.assert.calledOnce(resetStub)
+            } finally {
+                delete testRequire.cache[facadePath]
+                if (cachedFacade) {
+                    testRequire.cache[facadePath] = cachedFacade
+                }
+                onChangeStub.restore()
+                onDeleteStub.restore()
+            }
+        })
+
         it('should refresh a cacheable watched source when the watcher reports a change', async () => {
             const texPath = get.path(fixture, 'main.tex')
             const uri = vscode.Uri.file(texPath)
@@ -70,6 +107,46 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             assert.strictEqual(lw.cache.get(texPath), undefined)
             assert.hasLog(`Removed ${texPath} .`)
+        })
+    })
+
+    describe('Cache instances', () => {
+        it('should construct without registering process-wide listeners', () => {
+            const onChangeSpy = sinon.spy(lw.watcher.src, 'onChange')
+            const onDeleteSpy = sinon.spy(lw.watcher.src, 'onDelete')
+            const onDisposeStub = lw.onDispose as sinon.SinonStub
+            onDisposeStub.resetHistory()
+
+            try {
+                new Cache()
+
+                sinon.assert.notCalled(onChangeSpy)
+                sinon.assert.notCalled(onDeleteSpy)
+                sinon.assert.notCalled(onDisposeStub)
+            } finally {
+                onChangeSpy.restore()
+                onDeleteSpy.restore()
+            }
+        })
+
+        it('should keep cache and in-flight state independent between instances', async () => {
+            const first = new Cache()
+            const second = new Cache()
+            const texPath = get.path(fixture, 'main.tex')
+            const anotherPath = get.path(fixture, 'another.tex')
+
+            await first.refreshCache(texPath)
+            await second.refreshCache(anotherPath)
+
+            assert.ok(first.get(texPath))
+            assert.strictEqual(second.get(texPath), undefined)
+            assert.strictEqual(first.get(anotherPath), undefined)
+            assert.ok(second.get(anotherPath))
+            assert.notStrictEqual(first.promises, second.promises)
+
+            first.reset()
+            assert.listStrictEqual(first.paths(), [])
+            assert.listStrictEqual(second.paths(), [anotherPath])
         })
     })
 
