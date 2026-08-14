@@ -8,7 +8,7 @@ new repository facts conflict with the plan or require a behavioral decision.
 Behavior outside the decisions recorded here must not be changed without a new
 review.
 
-Current status: **Phase 4 complete; Phase 5 not started.**
+Current status: **Phase 5 complete; Phase 6 not started.**
 
 The migration must remain incremental and reversible. Structural moves, test
 moves, and behavior changes belong in separate commits whenever practical.
@@ -53,7 +53,6 @@ src/core/cache/dependencies.ts
 src/core/cache/bibliography.ts
 src/core/cache/auxiliaries.ts
 
-test/units/01_core/cache-lifecycle.test.ts
 test/units/01_core/cache.test.ts
 test/units/01_core/cache-store.test.ts
 test/units/01_core/cache-dependencies.test.ts
@@ -370,8 +369,8 @@ At minimum, add design comments for:
 
 Tests remain flat under `test/units/01_core/`:
 
-- `cache-lifecycle.test.ts`: singleton export and extension-disposal wiring;
-- `cache.test.ts`: `Cache` orchestration and public behavior;
+- `cache.test.ts`: public exports, singleton/lifecycle wiring, `Cache`
+  orchestration, and public behavior;
 - `cache-store.test.ts`: isolated `CacheStore` behavior;
 - `cache-dependencies.test.ts`: input/XR discovery and TeX graph traversal;
 - `cache-bibliography.test.ts`: BibTeX/glossary discovery and traversal;
@@ -541,7 +540,8 @@ and the listener ownership used at this phase boundary.
 
 **Tests to move/add:** Isolated instance-state tests and all `CacheStore` branch
 tests. `cache-store.test.ts` constructs data in memory and does not use a fixture.
-Keep facade listener tests in `cache.test.ts` until Phase 5.
+Keep facade listener tests in `cache.test.ts`; Phase 5 verifies and strengthens
+them in place rather than creating a separate lifecycle test file.
 
 **Implementation evidence:** `CacheStore` now owns cache entries and the
 in-flight map without importing `lw`. Every `Cache` owns one store, its refresh
@@ -808,36 +808,59 @@ for the full repository. Both `tsc -p tsconfig.json` and
 
 **Rollback point:** The completed Phase 3 commit.
 
-### [ ] Phase 5: Verify the public cache module
+### [x] Phase 5: Verify the public cache module
 
-**Status:** Not started.
+**Status:** Complete on 2026-08-14. No production wiring defect was found, so
+this phase changed tests and migration documentation only.
 
 **Goal:** Verify the coordinator exports, production singleton, and global
 lifecycle wiring after the post-Phase 1.5 consolidation.
 
-**Files affected:** `cache-lifecycle.test.ts`, `cache.test.ts`, and only if a wiring
-defect is found, `src/core/cache.ts`.
+**Files affected:** `cache.test.ts`, this migration document, and only if a
+wiring defect is found, `src/core/cache.ts`.
 
 **Behavior policy:** Preserve watcher-change refresh, watcher-delete removal,
 watcher resets, and extension disposal behavior.
 
-**Implementation notes:** Move the import-time listener characterization tests
-from `cache.test.ts` to `cache-lifecycle.test.ts`. Verify that the module exports
-`Cache` and `cache`, that the production constructor owns source change/delete
-subscriptions, and that the statement after singleton creation passes it to
-`lw.onDispose`. Test-created instances must be disposed after each test.
+**Implementation notes:** Keep lifecycle coverage in `cache.test.ts`; do not
+create `cache-lifecycle.test.ts` or a corresponding fixture directory. Verify
+that the exact runtime exports are `Cache` and `cache`, the exported singleton
+is the value installed as `lw.cache`, each constructor owns source change/delete
+subscriptions, and only the module-level production singleton is passed to
+`lw.onDispose`. Isolated CommonJS reloads must intercept all registrations,
+dispose the isolated singleton, and restore the original require-cache entry in
+`finally`. Test-created instances must always be disposed.
 
 **Required comments:** Explain why each instance owns its subscriptions while
 only the production instance is registered with the extension lifecycle.
 
-**Tests to move/add:** Singleton identity, exact export surface, source change,
-source delete, and extension disposal wiring.
+**Tests to move/add:** Keep the existing source change/delete integration tests.
+Add exact export and singleton identity checks, exact production
+`lw.onDispose` wiring, constructor registration ownership, returned-disposable
+release, reset subscription survival, dispose callback removal, and isolation
+between multiple instance subscriptions. Do not add test-only production APIs;
+intercept public registration boundaries instead. The independent per-instance
+store/in-flight test remains in the same file as coordinator coverage.
 
-**Coverage evidence:** Pending for the public cache module and all internal files.
+**Coverage evidence:** The final scoped c8 run reported statements **100%**,
+branches **100%**, functions **100%**, and lines **100%** separately for
+`src/core/cache.ts`, `src/core/cache/auxiliaries.ts`,
+`src/core/cache/bibliography.ts`, `src/core/cache/dependencies.ts`, and
+`src/core/cache/store.ts`. The aggregate row also reported 100% for all four
+metrics.
+
+**Verification evidence:** All commands ran with Node `v20.20.2`. Full-repository
+ESLint passed. Both `tsc -p tsconfig.json` and
+`tsc -p viewer/tsconfig.json` passed. The focused cache suite passed with
+**107 passing**; the full suite and final scoped coverage run passed with
+**1114 passing**. The lifecycle tests confirmed the existing wiring without a
+production source change.
 
 **Verification commands:** Standard Node 20 verification suite.
 
-**Suggested commit boundary:** Cache-module lifecycle tests only.
+**Suggested commit boundary:** Cache-module lifecycle tests and migration
+documentation only; production source changes require a demonstrated wiring
+defect.
 
 **Rollback point:** The completed Phase 4 commit.
 

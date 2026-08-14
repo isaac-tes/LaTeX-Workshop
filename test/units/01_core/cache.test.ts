@@ -5,10 +5,13 @@ import { createRequire } from 'module'
 import * as sinon from 'sinon'
 import { assert, get, log, mock, set, sleep } from '../utils'
 import { lw } from '../../../src/lw'
-import { Cache } from '../../../src/core/cache'
+import * as cacheModule from '../../../src/core/cache'
 import * as auxiliaries from '../../../src/core/cache/auxiliaries'
 import * as bibliography from '../../../src/core/cache/bibliography'
 import * as dependencies from '../../../src/core/cache/dependencies'
+
+const {Cache, cache} = cacheModule
+type CacheInstance = InstanceType<typeof Cache>
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     const fixture = get.fixture(__filename)
@@ -46,8 +49,14 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         sinon.restore()
     })
 
-    describe('import-time source watcher listeners', () => {
-        it('should capture the production singleton in every external callback', () => {
+    describe('public module lifecycle', () => {
+        it('should expose only the Cache class and production singleton', () => {
+            assert.deepStrictEqual(Object.keys(cacheModule).sort(), ['Cache', 'cache'])
+            assert.ok(cache instanceof Cache)
+            assert.strictEqual(cache, lw.cache)
+        })
+
+        it('should isolate import-time subscriptions and extension disposal during a module reload', () => {
             const testRequire = createRequire(__filename)
             const cacheModulePath = testRequire.resolve('../../../src/core/cache')
             const cachedCacheModule = testRequire.cache[cacheModulePath]
@@ -57,26 +66,41 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const onDeleteStub = sinon.stub(lw.watcher.src, 'onDelete').returns(new vscode.Disposable(deleteDisposeSpy))
             const onDisposeStub = lw.onDispose as sinon.SinonStub
             onDisposeStub.resetHistory()
+            let isolatedCacheModule: typeof import('../../../src/core/cache') | undefined
+            let resetStub: sinon.SinonStub | undefined
+            let disposed = false
 
-            // Reload the cache module while registrations are intercepted so this
-            // test can exercise its private callbacks without exporting them.
+            // Intercept every import-time registration and restore the original
+            // module entry so the reload cannot leak a second production instance.
             delete testRequire.cache[cacheModulePath]
             try {
-                const isolatedCacheModule = testRequire(cacheModulePath) as typeof import('../../../src/core/cache')
+                isolatedCacheModule = testRequire(cacheModulePath) as typeof import('../../../src/core/cache')
                 const changeCallback = onChangeStub.firstCall.args[0] as (uri: vscode.Uri) => void
                 const deleteCallback = onDeleteStub.firstCall.args[0] as (uri: vscode.Uri) => void
                 const disposable = onDisposeStub.firstCall.args[0] as vscode.Disposable
-                const resetStub = sinon.stub(isolatedCacheModule.cache, 'reset')
                 const unsupportedUri = vscode.Uri.file('/dev/null')
+                resetStub = sinon.stub(isolatedCacheModule.cache, 'reset')
+
+                assert.deepStrictEqual(Object.keys(isolatedCacheModule).sort(), ['Cache', 'cache'])
+                assert.ok(isolatedCacheModule.cache instanceof isolatedCacheModule.Cache)
+                assert.notStrictEqual(isolatedCacheModule.cache, lw.cache)
+                sinon.assert.calledOnce(onChangeStub)
+                sinon.assert.calledOnce(onDeleteStub)
+                sinon.assert.calledOnceWithExactly(onDisposeStub, isolatedCacheModule.cache)
 
                 changeCallback(unsupportedUri)
                 deleteCallback(unsupportedUri)
                 disposable.dispose()
+                disposed = true
 
                 sinon.assert.calledOnce(resetStub)
                 sinon.assert.calledOnce(changeDisposeSpy)
                 sinon.assert.calledOnce(deleteDisposeSpy)
             } finally {
+                if (!disposed) {
+                    isolatedCacheModule?.cache.dispose()
+                }
+                resetStub?.restore()
                 delete testRequire.cache[cacheModulePath]
                 if (cachedCacheModule) {
                     testRequire.cache[cacheModulePath] = cachedCacheModule
@@ -118,23 +142,86 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     })
 
     describe('Cache instances', () => {
-        it('should own watcher subscriptions without registering extension disposal', () => {
-            const onChangeSpy = sinon.spy(lw.watcher.src, 'onChange')
-            const onDeleteSpy = sinon.spy(lw.watcher.src, 'onDelete')
+        it('should release owned watcher subscriptions before reset without registering extension disposal', () => {
+            const changeDisposeSpy = sinon.spy()
+            const deleteDisposeSpy = sinon.spy()
+            const onChangeStub = sinon.stub(lw.watcher.src, 'onChange').returns(new vscode.Disposable(changeDisposeSpy))
+            const onDeleteStub = sinon.stub(lw.watcher.src, 'onDelete').returns(new vscode.Disposable(deleteDisposeSpy))
             const onDisposeStub = lw.onDispose as sinon.SinonStub
             onDisposeStub.resetHistory()
-            let instance: Cache | undefined
+            let instance: CacheInstance | undefined
+            let resetStub: sinon.SinonStub | undefined
+            let disposed = false
 
             try {
                 instance = new Cache()
+                resetStub = sinon.stub(instance, 'reset').callsFake(() => {
+                    sinon.assert.calledOnce(changeDisposeSpy)
+                    sinon.assert.calledOnce(deleteDisposeSpy)
+                })
 
-                sinon.assert.calledOnce(onChangeSpy)
-                sinon.assert.calledOnce(onDeleteSpy)
+                sinon.assert.calledOnce(onChangeStub)
+                sinon.assert.calledOnce(onDeleteStub)
                 sinon.assert.notCalled(onDisposeStub)
+                instance.dispose()
+                disposed = true
+
+                sinon.assert.calledOnce(resetStub)
             } finally {
-                instance?.dispose()
-                onChangeSpy.restore()
-                onDeleteSpy.restore()
+                if (!disposed) {
+                    instance?.dispose()
+                }
+                resetStub?.restore()
+                onChangeStub.restore()
+                onDeleteStub.restore()
+            }
+        })
+
+        it('should preserve subscriptions across reset and remove only the disposed instance callbacks', () => {
+            type Handler = (uri: vscode.Uri) => void
+            const changeHandlers = new Set<Handler>()
+            const deleteHandlers = new Set<Handler>()
+            const onChangeStub = sinon.stub(lw.watcher.src, 'onChange').callsFake(handler => {
+                changeHandlers.add(handler)
+                return new vscode.Disposable(() => changeHandlers.delete(handler))
+            })
+            const onDeleteStub = sinon.stub(lw.watcher.src, 'onDelete').callsFake(handler => {
+                deleteHandlers.add(handler)
+                return new vscode.Disposable(() => deleteHandlers.delete(handler))
+            })
+            const first = new Cache()
+            const second = new Cache()
+            const firstRefresh = sinon.stub(first, 'refreshCache').resolves()
+            const secondRefresh = sinon.stub(second, 'refreshCache').resolves()
+            const uri = vscode.Uri.file(get.path(fixture, 'main.tex'))
+            let firstDisposed = false
+
+            try {
+                first.reset()
+                assert.strictEqual(changeHandlers.size, 2)
+                assert.strictEqual(deleteHandlers.size, 2)
+
+                changeHandlers.forEach(handler => handler(uri))
+                sinon.assert.calledOnceWithExactly(firstRefresh, uri.fsPath)
+                sinon.assert.calledOnceWithExactly(secondRefresh, uri.fsPath)
+
+                first.dispose()
+                firstDisposed = true
+                assert.strictEqual(changeHandlers.size, 1)
+                assert.strictEqual(deleteHandlers.size, 1)
+                firstRefresh.resetHistory()
+                secondRefresh.resetHistory()
+
+                changeHandlers.forEach(handler => handler(uri))
+                sinon.assert.notCalled(firstRefresh)
+                sinon.assert.calledOnceWithExactly(secondRefresh, uri.fsPath)
+            } finally {
+                if (!firstDisposed) {
+                    first.dispose()
+                }
+                second.dispose()
+                onChangeStub.restore()
+                onDeleteStub.restore()
             }
         })
 
