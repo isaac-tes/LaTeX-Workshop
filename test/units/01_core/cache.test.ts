@@ -6,6 +6,7 @@ import * as sinon from 'sinon'
 import { assert, get, log, mock, set, sleep } from '../utils'
 import { lw } from '../../../src/lw'
 import { Cache } from '../../../src/core/cache'
+import * as bibliography from '../../../src/core/cache/bibliography'
 import * as dependencies from '../../../src/core/cache/dependencies'
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
@@ -423,11 +424,30 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.hasLog('Parsed LaTeX AST in ')
         })
 
-        it('should update document elements during caching', async () => {
+        it('should coordinate bibliography updates with the owning instance', async () => {
             const texPath = get.path(fixture, 'main.tex')
+            const instance = new Cache()
+            const updateStub = sinon.stub(bibliography, 'updateBibliography').resolves()
 
-            await lw.cache.refreshCache(texPath)
-            assert.hasLog('Updated elements in ')
+            try {
+                await instance.refreshCache(texPath)
+                const [fileCache, context] = updateStub.firstCall.args
+                assert.strictEqual(fileCache.filePath, texPath)
+
+                const getSpy = sinon.spy(instance, 'get')
+                const internalInstance = instance as unknown as {isExcluded: (filePath: string) => boolean}
+                const isExcludedSpy = sinon.spy(internalInstance, 'isExcluded')
+                assert.strictEqual(context.getCache(texPath), fileCache)
+                context.isExcluded(get.path(fixture, 'main.bbl'))
+
+                sinon.assert.calledOnceWithExactly(getSpy, texPath)
+                sinon.assert.calledOnceWithExactly(isExcludedSpy, get.path(fixture, 'main.bbl'))
+                getSpy.restore()
+                isExcludedSpy.restore()
+            } finally {
+                updateStub.restore()
+                instance.dispose()
+            }
         })
 
         it('should cache provided dirty TeX source', async () => {
@@ -713,113 +733,6 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
     })
 
-    describe('lw.cache.updateBibfiles', () => {
-        it('should not add any bib files if there is nothing', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-
-            lw.cache.add(texPath)
-            await lw.cache.refreshCache(texPath)
-            const fileCache = lw.cache.get(texPath)
-            assert.ok(fileCache)
-            assert.strictEqual(fileCache.bibfiles.size, 0)
-        })
-
-        it('should not add a bib file if the file does not exist', async () => {
-            const toParse = get.path(fixture, 'update_bibfiles', 'file_not_exist.tex')
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            const fileCache = lw.cache.get(toParse)
-            assert.ok(fileCache)
-            assert.listStrictEqual(Array.from(fileCache.bibfiles), [])
-        })
-
-        it('should add bib files with \\bibliography, \\addbibresource, \\putbib, and possible presense of \\subfix', async () => {
-            const bibPath = get.path(fixture, 'main.bib')
-            const toParse = get.path(fixture, 'update_bibfiles', 'main.tex')
-
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            const fileCache = lw.cache.get(toParse)
-            assert.ok(fileCache)
-            assert.listStrictEqual(Array.from(fileCache.bibfiles), [
-                bibPath,
-                get.path(fixture, 'update_bibfiles', 'bib', '1.bib'),
-                get.path(fixture, 'update_bibfiles', 'bib', '2.bib'),
-                get.path(fixture, 'update_bibfiles', 'bib', '3.bib'),
-                get.path(fixture, 'update_bibfiles', 'bib', '4.bib'),
-                get.path(fixture, 'update_bibfiles', 'bib', '5.bib'),
-            ])
-        })
-
-        it('should add multiple bib files in one macro', async () => {
-            const bibPath = get.path(fixture, 'main.bib')
-            const toParse = get.path(fixture, 'update_bibfiles', 'same_macro.tex')
-
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            const fileCache = lw.cache.get(toParse)
-            assert.ok(fileCache)
-            assert.listStrictEqual(Array.from(fileCache.bibfiles), [
-                bibPath,
-                get.path(fixture, 'update_bibfiles', 'bib', '1.bib'),
-            ])
-        })
-
-        it('should not add excluded bib files', async () => {
-            const toParse = get.path(fixture, 'update_bibfiles', 'file_excluded.tex')
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            const fileCache = lw.cache.get(toParse)
-            assert.ok(fileCache)
-            assert.listStrictEqual(Array.from(fileCache.bibfiles), [])
-        })
-
-        it('should watch bib files if added', async () => {
-            const bibPath = get.path(fixture, 'main.bib')
-            const toParse = get.path(fixture, 'update_bibfiles', 'same_macro.tex')
-
-            lw.cache.add(toParse)
-            await lw.cache.refreshCache(toParse)
-            assert.ok(lw.watcher.bib.has(vscode.Uri.file(bibPath)))
-        })
-    })
-
-    describe('lw.cache.updateGlossaryBibFiles', () => {
-        it('should add and watch glossary files from both supported macros', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-            const bibPath = get.path(fixture, 'main.bib')
-            const documentStub = mock.textDocument(texPath, '\\GlsXtrLoadResources[src={main}]\n\\glsbibdata{main}', { isDirty: true })
-
-            await lw.cache.refreshCache(texPath)
-            documentStub.restore()
-
-            assert.listStrictEqual(Array.from(lw.cache.get(texPath)?.glossarybibfiles ?? []), [bibPath])
-            assert.listStrictEqual(lw.cache.getIncludedGlossaryBib(texPath), [bibPath])
-            assert.ok(lw.watcher.glossary.has(vscode.Uri.file(bibPath)))
-        })
-
-        it('should ignore excluded and empty glossary paths', async () => {
-            const texPath = get.path(fixture, 'main.tex')
-            const bibPath = get.path(fixture, 'main.bib')
-            const documentStub = mock.textDocument(texPath, '\\glsbibdata{main,empty}', { isDirty: true })
-            const getBibPathStub = sinon.stub(lw.file, 'getBibPath')
-            getBibPathStub.withArgs('main', sinon.match.any).resolves([bibPath])
-            getBibPathStub.withArgs('empty', sinon.match.any).resolves([''])
-            set.config('latex.watch.files.ignore', ['**/main.bib'])
-
-            await lw.cache.refreshCache(texPath)
-            documentStub.restore()
-            getBibPathStub.restore()
-
-            assert.listStrictEqual(lw.cache.getIncludedGlossaryBib(texPath), [])
-        })
-
-        it('should return an empty list without a root or cached file', () => {
-            assert.listStrictEqual(lw.cache.getIncludedGlossaryBib(), [])
-            assert.listStrictEqual(lw.cache.getIncludedGlossaryBib(get.path(fixture, 'missing.tex')), [])
-        })
-    })
-
     describe('lw.cache.loadFlsFile and lw.cache.parseFlsContent', () => {
         it('should do nothing if no .fls is found', async () => {
             const texPathAnother = get.path(fixture, 'another.tex')
@@ -1027,51 +940,27 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
     })
 
-    describe('lw.cache.getIncludedBib', () => {
-        it('should return an empty list if no file path is given', () => {
-            assert.listStrictEqual(lw.cache.getIncludedBib(), [])
-        })
+    describe('lw.cache bibliography query coordination', () => {
+        it('should dynamically resolve the root and forward the owning instance context', () => {
+            const firstRoot = set.root(fixture, 'main.tex')
+            const bibStub = sinon.stub(bibliography, 'getIncludedBib').returns(['/bib.bib'])
+            const glossaryStub = sinon.stub(bibliography, 'getIncludedGlossaryBib').returns(['/glossary.bib'])
 
-        it('should return an empty list if the given file is not cached', () => {
-            const toParse = get.path(fixture, 'included_bib', 'main.tex')
-            assert.listStrictEqual(lw.cache.getIncludedBib(toParse), [])
-        })
+            try {
+                assert.deepStrictEqual(lw.cache.getIncludedBib(), ['/bib.bib'])
+                const secondRoot = set.root(fixture, 'another.tex')
+                assert.deepStrictEqual(lw.cache.getIncludedGlossaryBib(), ['/glossary.bib'])
+                assert.deepStrictEqual(lw.cache.getIncludedBib('/explicit.tex'), ['/bib.bib'])
 
-        it('should return a list of included .bib files', async () => {
-            const bibPath = get.path(fixture, 'main.bib')
-            const toParse = get.path(fixture, 'included_bib', 'main.tex')
-
-            await lw.cache.refreshCache(toParse)
-            assert.listStrictEqual(lw.cache.getIncludedBib(toParse), [bibPath])
-        })
-
-        it('should return a list of included .bib files with \\input', async () => {
-            const bibPath = get.path(fixture, 'main.bib')
-            const toParse = get.path(fixture, 'included_bib', 'another.tex')
-
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.wait(get.path(fixture, 'included_bib', 'main.tex'))
-            assert.listStrictEqual(lw.cache.getIncludedBib(toParse), [bibPath])
-        })
-
-        it('should return a list of included .bib files with circular inclusions', async () => {
-            const bibPath = get.path(fixture, 'main.bib')
-            const toParse = get.path(fixture, 'included_bib', 'circular_1.tex')
-            const circularChild = get.path(fixture, 'included_bib', 'circular_2.tex')
-
-            lw.cache.add(toParse)
-            lw.cache.add(circularChild)
-            await lw.cache.refreshCache(toParse)
-            await lw.cache.refreshCache(circularChild)
-            assert.listStrictEqual(lw.cache.getIncludedBib(toParse), [bibPath])
-        })
-
-        it('should return a list of de-duplicated .bib files', async () => {
-            const bibPath = get.path(fixture, 'main.bib')
-            const toParse = get.path(fixture, 'included_bib', 'duplicate_1.tex')
-
-            await lw.cache.refreshCache(toParse)
-            assert.listStrictEqual(lw.cache.getIncludedBib(toParse), [bibPath])
+                assert.strictEqual(bibStub.firstCall.args[0], firstRoot)
+                assert.strictEqual(glossaryStub.firstCall.args[0], secondRoot)
+                assert.strictEqual(bibStub.secondCall.args[0], '/explicit.tex')
+                assert.strictEqual(bibStub.firstCall.args[1], bibStub.secondCall.args[1])
+                assert.strictEqual(bibStub.firstCall.args[1], glossaryStub.firstCall.args[1])
+            } finally {
+                bibStub.restore()
+                glossaryStub.restore()
+            }
         })
     })
 

@@ -8,6 +8,7 @@ import { lw } from '../lw'
 import type { FileCache } from '../types'
 
 import * as utils from '../utils/utils'
+import * as bibliography from './cache/bibliography'
 import * as dependencies from './cache/dependencies'
 import { CacheStore } from './cache/store'
 
@@ -26,6 +27,10 @@ export class Cache implements vscode.Disposable {
         refreshSource: (filePath, rootPath) => {
             void this.refreshCache(filePath, rootPath)
         }
+    }
+    private readonly bibliographyContext: bibliography.BibliographyContext = {
+        getCache: filePath => this.get(filePath),
+        isExcluded: filePath => this.isExcluded(filePath)
     }
     private readonly watcherSubscription: vscode.Disposable
     /** Coordinates the single outline reconstruction after current refreshes finish. */
@@ -372,86 +377,9 @@ export class Cache implements vscode.Disposable {
         lw.completion.macro.parse(fileCache)
         lw.completion.subsuperscript.parse(fileCache)
         lw.completion.input.parseGraphicsPath(fileCache)
-        await this.updateBibfiles(fileCache)
-        await this.updateGlossaryBibFiles(fileCache)
+        await bibliography.updateBibliography(fileCache, this.bibliographyContext)
         const elapsed = performance.now() - start
         logger.log(`Updated elements in ${elapsed.toFixed(2)} ms: ${fileCache.filePath} .`)
-    }
-
-    /**
-     * Updates the bibliography files associated with a given file cache.
-     *
-     * This function parses the content of a file cache to find bibliography macros
-     * (such as `\bibliography`, `\addbibresource`, and `\putbib`) using a regular
-     * expression. It extracts the bibliography file paths specified in these
-     * macros, resolves their full paths, and adds them to the set of bibliography
-     * files in the file cache. If a bibliography file is not excluded, it logs the
-     * action, adds the file to the cache, and ensures that it is being watched for
-     * changes.
-     *
-     * @param {FileCache} fileCache - The file cache object to update with
-     * bibliography files.
-     */
-    private async updateBibfiles(fileCache: FileCache) {
-        const bibReg =
-            /(?:\\(?:bibliography|addbibresource)(?:\[[^[\]{}]*\])?){(?:\\subfix{)?([\s\S]+?)(?:\})?}|(?:\\putbib)\[(?:\\subfix{)?([\s\S]+?)(?:\})?\]/gm
-
-        let result: RegExpExecArray | null
-        while ((result = bibReg.exec(fileCache.contentTrimmed)) !== null) {
-            const bibs = (result[1] ? result[1] : result[2]).split(',').map(bib => bib.trim())
-
-            for (const bib of bibs) {
-                const bibPaths = await lw.file.getBibPath(bib, path.dirname(fileCache.filePath))
-                for (const bibPath of bibPaths) {
-                    if (this.isExcluded(bibPath)) {
-                        continue
-                    }
-                    fileCache.bibfiles.add(bibPath)
-                    logger.log(`Bib ${bibPath} from ${fileCache.filePath} .`)
-                    const bibUri = lw.file.toUri(bibPath)
-                    if (!lw.watcher.bib.has(bibUri)) {
-                        lw.watcher.bib.add(bibUri)
-                    }
-                }
-            }
-        }
-    }
-
-    /**
-     * Updates the glossary files associated with a given file cache.
-     *
-     * This function parses the content of a file cache to find `\GlsXtrLoadResources` and `\glsbibdata`
-     * using a regular expression. It extracts the  file paths specified in these
-     * macros, resolves their full paths, and adds them to the set of glossary
-     * files in the file cache. If a glossary file is not excluded, it logs the
-     * action, adds the file to the cache, and ensures that it is being watched for
-     * changes.
-     *
-     * @param {FileCache} fileCache - The file cache object to update with
-     * bibliography files.
-     */
-    private async updateGlossaryBibFiles(fileCache: FileCache) {
-        const glossaryReg = /(?:\\GlsXtrLoadResources\s*\[.*?src=\{([^}]+)\}.*?\])|(?:\\glsbibdata(?:\[[^\]]*\])?\{([^}]*)\})/gs
-
-        let result: RegExpExecArray | null
-        while ((result = glossaryReg.exec(fileCache.contentTrimmed)) !== null) {
-            const bibs = (result[1] ? result[1] : result[2]).split(',').map(bib => bib.trim())
-
-            for (const bib of bibs) {
-                const bibPaths = await lw.file.getBibPath(bib, path.dirname(fileCache.filePath))
-                for (const bibPath of bibPaths) {
-                    if (!bibPath || this.isExcluded(bibPath)) {
-                        continue
-                    }
-                    fileCache.glossarybibfiles.add(bibPath)
-                    logger.log(`Glossary bib ${bibPath} from ${fileCache.filePath} .`)
-                    const bibUri = lw.file.toUri(bibPath)
-                    if (!lw.watcher.glossary.has(bibUri)) {
-                        lw.watcher.glossary.add(bibUri)
-                    }
-                }
-            }
-        }
     }
 
     /**
@@ -624,54 +552,6 @@ export class Cache implements vscode.Disposable {
     }
 
     /**
-     * Retrieves a list of included bib files for a given file, ensuring
-     * uniqueness.
-     *
-     * This function processes a specified file path to extract and return all
-     * associated bib files. It starts with the provided file path (or the
-     * root file path if not specified) and checks its cache entry. If the cache
-     * entry exists, the function collects the bib files associated with
-     * the file and its children. The function ensures that the same file is not
-     * processed multiple times by keeping track of checked files. The result is an
-     * array of unique bib file paths.
-     *
-     * @param {string} [bibType] - The type of .bib file to search for.
-     * @param {string} [filePath] - The path to the file to check for included
-     * bib files. Defaults to the root file path if not provided.
-     * @param {string[]} [includedBib=[]] - An array to accumulate the bib
-     * files found.
-     * @param {string[]} [checkedTeX=[]] - An array to store the paths of TeX files
-     * already checked.
-     * @returns {string[]} - An array of unique bib file paths included in
-     * the specified file and its children.
-     */
-    private getIncludedBibGeneric(bibType: 'bibtex' | 'glossary', filePath?: string, includedBib: string[] = [], checkedTeX: string[] = []): string[] {
-        filePath = filePath ?? lw.root.file.path
-        if (filePath === undefined) {
-            return []
-        }
-        const fileCache = this.get(filePath)
-        if (fileCache === undefined) {
-            return []
-        }
-        checkedTeX.push(filePath)
-        if (bibType === 'bibtex') {
-            includedBib.push(...fileCache.bibfiles)
-        } else if (bibType === 'glossary') {
-            includedBib.push(...fileCache.glossarybibfiles)
-        }
-        for (const child of fileCache.children) {
-            if (checkedTeX.includes(child.filePath)) {
-                // Already parsed
-                continue
-            }
-            this.getIncludedBibGeneric(bibType, child.filePath, includedBib, checkedTeX)
-        }
-        // Make sure to return an array with unique entries
-        return Array.from(new Set(includedBib))
-    }
-
-    /**
      * Retrieves a list of included bibliography files for a given file, ensuring
      * uniqueness.
      *
@@ -681,7 +561,7 @@ export class Cache implements vscode.Disposable {
      * the specified file and its children.
      */
     getIncludedBib(filePath?: string): string[] {
-        return this.getIncludedBibGeneric('bibtex', filePath)
+        return bibliography.getIncludedBib(filePath ?? lw.root.file.path, this.bibliographyContext)
     }
 
     /**
@@ -694,7 +574,7 @@ export class Cache implements vscode.Disposable {
      * the specified file and its children.
      */
     getIncludedGlossaryBib(filePath?: string): string[] {
-        return this.getIncludedBibGeneric('glossary', filePath)
+        return bibliography.getIncludedGlossaryBib(filePath ?? lw.root.file.path, this.bibliographyContext)
     }
 
     /**

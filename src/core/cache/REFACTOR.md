@@ -8,7 +8,7 @@ new repository facts conflict with the plan or require a behavioral decision.
 Behavior outside the decisions recorded here must not be changed without a new
 review.
 
-Current status: **Phase 2 complete; Phase 3 not started.**
+Current status: **Phase 3 complete; Phase 4 not started.**
 
 The migration must remain incremental and reversible. Structural moves, test
 moves, and behavior changes belong in separate commits whenever practical.
@@ -139,8 +139,22 @@ each other to reach the production singleton.
 
 This module owns BibTeX and glossary resource discovery, registration, and
 included-bibliography graph traversal. Use functions and local types. It may
-access `lw` directly during this refactoring. `Cache` resolves the default root
-before invoking graph queries in the final design.
+access `lw.file`, `lw.watcher.bib`, `lw.watcher.glossary`, and logging directly
+during this refactoring, but it must never access `lw.cache`.
+
+During the behavior-preserving extraction, define `BibliographyContext` in this
+file with exactly `getCache` and `isExcluded` callbacks from the owning `Cache`.
+Each `Cache` creates one immutable context using arrow wrappers that dynamically
+call its instance methods. Export only `updateBibliography`, `getIncludedBib`,
+`getIncludedGlossaryBib`, and the context type. Keep the two scanners and the
+generic graph traversal private. `Cache` dynamically resolves the default root
+before invoking graph queries.
+
+Phase 6 removes `BibliographyContext` completely: discovery returns explicit
+results for `Cache` to filter, store, and register with watchers. Graph helpers
+may still receive one standalone read-only cache lookup callback. AUX
+`\bibdata` discovery remains part of the auxiliary-file workflow and does not
+move into this module in Phase 3.
 
 ### Auxiliaries: `cache/auxiliaries.ts`
 
@@ -647,9 +661,9 @@ passed with **1113 passing**.
 
 **Rollback point:** The completed Phase 1.5 commit.
 
-### [ ] Phase 3: Extract bibliography handling
+### [x] Phase 3: Extract bibliography handling
 
-**Status:** Not started.
+**Status:** Complete on 2026-08-14.
 
 **Goal:** Move BibTeX/glossary discovery, watcher registration, and graph queries
 to `bibliography.ts`.
@@ -657,19 +671,50 @@ to `bibliography.ts`.
 **Files affected:** `cache/bibliography.ts`, `src/core/cache.ts`, and
 `cache-bibliography.test.ts`.
 
-**Behavior policy:** Preserve macro matching, resolution, exclusions, watcher
-side effects, default-root behavior, result ordering, and de-duplication.
+**Behavior policy:** This phase is structural only. Preserve the exact regular
+expressions, macro matching, sequential path resolution, error propagation,
+exclusions, watcher side effects, default-root behavior, DFS scope, result
+ordering, logging, and de-duplication. AUX `\bibdata` stays in `Cache` until
+Phase 4.
 
-**Implementation notes:** Use functions and local types. Direct `lw` access is
-allowed. Do not create another stateful service class.
+**Implementation notes:** Export one `updateBibliography` orchestrator, the two
+public-API-shaped graph queries, and the `BibliographyContext` type. Keep the
+BibTeX and glossary scanners and generic DFS helper private. The orchestrator
+must fully await BibTeX discovery before glossary discovery. Create fresh
+stateful regular expressions per call and keep all resource/path loops serial.
+The context contains only instance-bound `getCache` and `isExcluded` arrow
+callbacks. Direct `lw` access is allowed for file services, separate BibTeX and
+glossary watchers, and logging; never access `lw.cache`. `Cache` resolves the
+default root dynamically on each graph query. Do not create another stateful
+service class.
 
-**Required comments:** Explain supported macro families, bibliography versus
-glossary ownership, and graph cycle prevention.
+**Required comments:** Explain supported macro families, BibTeX-before-glossary
+ordering, insertion-before-watcher side effects, bibliography versus glossary
+ownership, DFS first-occurrence ordering, XR exclusion, and graph cycle
+prevention.
 
-**Tests to move/add:** All BibTeX/glossary macros, multiple resources,
-exclusions, missing files, watcher state, nested/circular graphs, and duplicates.
+**Tests to move/add:** Move direct discovery and graph tests to the flat
+`cache-bibliography.test.ts`, using the existing shared cache fixture directory.
+Cover all BibTeX/glossary macros, multiple and empty resolved paths, exclusions,
+missing files, already-watched and separate-watcher behavior, insertion and log
+ordering, sequential resolution and immediate error propagation, dynamic root
+selection, nested/circular/duplicate/ordered graphs, and exclusion of XR edges.
+Keep only focused coordinator/context forwarding tests in `cache.test.ts`.
+Characterize without changing that empty BibTeX macros do not match, empty
+glossary macros resolve an empty resource name, and only glossary discovery
+filters empty resolved paths.
 
-**Coverage evidence:** Pending for all implemented cache files.
+**Coverage evidence:** The final scoped c8 run reported statements **100%**,
+branches **100%**, functions **100%**, and lines **100%** separately for
+`src/core/cache.ts`, `src/core/cache/bibliography.ts`,
+`src/core/cache/dependencies.ts`, and `src/core/cache/store.ts`. The aggregate
+row also reported 100% for all four metrics.
+
+**Verification evidence:** All commands ran with Node `v20.20.2`. ESLint passed
+for every changed TypeScript file. Both `tsc -p tsconfig.json` and
+`tsc -p viewer/tsconfig.json` passed. The final focused
+cache/bibliography/dependency/store/watcher suite passed with **132 passing**;
+the full suite and final scoped coverage run passed with **1115 passing**.
 
 **Verification commands:** Standard Node 20 verification suite.
 
@@ -753,16 +798,18 @@ cache module -> Cache -> store/dependencies/bibliography/auxiliaries
 ```
 
 **Files affected:** `src/core/cache.ts`, `cache/dependencies.ts`,
-`cache/auxiliaries.ts`, and their tests.
+`cache/bibliography.ts`, `cache/auxiliaries.ts`, and their tests.
 
 **Behavior policy:** Preserve externally visible behavior. Change only internal
 side-effect ownership.
 
-**Implementation notes:** Remove `DependencyContext` completely and replace its
-side-effect callbacks with typed discovery results. `Cache` applies mutations
-and schedules child work. `getIncludedTeX` may retain one standalone read-only
-cache lookup callback, which is not a side-effect context. Internal modules must
-not import each other or the production singleton.
+**Implementation notes:** Remove `DependencyContext` and
+`BibliographyContext` completely and replace their side-effect callbacks with
+typed discovery results. `Cache` applies mutations, exclusions, watcher
+registration, and child scheduling. `getIncludedTeX` and bibliography graph
+queries may retain one standalone read-only cache lookup callback, which is not
+a side-effect context. Internal modules must not import each other or the
+production singleton.
 
 **Required comments:** Explain discovery result ownership and why parent refresh
 does not await the full recursive graph.
