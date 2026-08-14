@@ -7,6 +7,31 @@ import { lw } from '../../../src/lw'
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     const fixture = get.fixture(__filename)
+    // Drive the watcher's real dispatch path while exposing only the private hooks these characterization tests need.
+    const sourceWatcherTestHooks = lw.watcher.src as unknown as {
+        onDidChange: (event: 'create' | 'change', uri: vscode.Uri) => Promise<void>,
+        onDidDelete: (uri: vscode.Uri) => Promise<void>
+    }
+
+    function deferred<T>() {
+        let resolve!: (value: T | PromiseLike<T>) => void
+        let reject!: (reason?: unknown) => void
+        const promise = new Promise<T>((promiseResolve, promiseReject) => {
+            resolve = promiseResolve
+            reject = promiseReject
+        })
+        return {promise, resolve, reject}
+    }
+
+    async function waitFor(condition: () => boolean, timeout = 1000): Promise<void> {
+        const started = Date.now()
+        while (!condition()) {
+            if (Date.now() - started >= timeout) {
+                throw new Error('Timed out waiting for cache test condition.')
+            }
+            await sleep(10)
+        }
+    }
 
     before(() => {
         mock.init(lw, 'watcher', 'cache')
@@ -14,6 +39,38 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
     after(() => {
         sinon.restore()
+    })
+
+    describe('import-time source watcher listeners', () => {
+        it('should refresh a cacheable watched source when the watcher reports a change', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const uri = vscode.Uri.file(texPath)
+            const eventStub = lw.event.fire as sinon.SinonStub
+            eventStub.resetHistory()
+            const documentStub = mock.textDocument(texPath, '\\section{watched}', {isDirty: true})
+            lw.cache.add(texPath)
+
+            await sourceWatcherTestHooks.onDidChange('change', uri)
+            documentStub.restore()
+            await waitFor(() => eventStub.calledWith(lw.event.FileParsed, texPath))
+
+            assert.strictEqual(lw.cache.get(texPath)?.content, '\\section{watched}')
+        })
+
+        it('should remove a cached source when the watcher confirms its deletion', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const uri = vscode.Uri.file(texPath)
+            set.config('latex.watch.delay', 0)
+            lw.cache.add(texPath)
+            await lw.cache.refreshCache(texPath)
+            const existsStub = sinon.stub(lw.file, 'exists').resolves(false)
+
+            await sourceWatcherTestHooks.onDidDelete(uri)
+            existsStub.restore()
+
+            assert.strictEqual(lw.cache.get(texPath), undefined)
+            assert.hasLog(`Removed ${texPath} .`)
+        })
     })
 
     describe('lw.cache.isExcluded', () => {
@@ -290,6 +347,147 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             await lw.cache.refreshCache(texPath)
             stub.restore()
             assert.strictEqual(lw.cache.get(lw.cache.paths()[0])?.content, '')
+        })
+
+        it('should keep a partial cache and emit completion side effects when AST parsing fails', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const parseStub = lw.parser.parse.tex as sinon.SinonStub
+            const eventStub = lw.event.fire as sinon.SinonStub
+            const outlineStub = lw.outline.reconstruct as sinon.SinonStub
+            parseStub.reset()
+            eventStub.resetHistory()
+            outlineStub.resetHistory()
+            parseStub.rejects(new Error('characterized parse failure'))
+
+            try {
+                await assert.rejects(lw.cache.refreshCache(texPath), /characterized parse failure/)
+
+                const cached = lw.cache.get(texPath)
+                assert.strictEqual(cached?.content, '%')
+                assert.strictEqual(cached?.ast, undefined)
+                assert.deepStrictEqual(cached?.elements, {})
+                assert.strictEqual(lw.cache.promises.get(texPath), undefined)
+                sinon.assert.calledWith(eventStub, lw.event.FileParsed, texPath)
+                sinon.assert.calledOnce(outlineStub)
+            } finally {
+                parseStub.reset()
+            }
+        })
+
+        it('should run same-file refreshes concurrently and let an earlier task clear the shared promise entry', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const parseStub = lw.parser.parse.tex as sinon.SinonStub
+            const firstParse = deferred<any>()
+            const secondParse = deferred<any>()
+            parseStub.reset()
+            parseStub.onFirstCall().returns(firstParse.promise)
+            parseStub.onSecondCall().returns(secondParse.promise)
+
+            let firstRefresh: ReturnType<typeof lw.cache.refreshCache> | undefined
+            let secondRefresh: ReturnType<typeof lw.cache.refreshCache> | undefined
+            try {
+                let documentStub = mock.textDocument(texPath, '\\section{first}', {isDirty: true})
+                firstRefresh = lw.cache.refreshCache(texPath)
+                documentStub.restore()
+
+                documentStub = mock.textDocument(texPath, '\\section{second}', {isDirty: true})
+                secondRefresh = lw.cache.refreshCache(texPath)
+                documentStub.restore()
+
+                await waitFor(() => parseStub.callCount === 2)
+                assert.strictEqual(lw.cache.get(texPath)?.content, '\\section{second}')
+                assert.ok(lw.cache.promises.has(texPath))
+
+                firstParse.resolve(undefined)
+                await firstRefresh
+
+                assert.strictEqual(lw.cache.promises.get(texPath), undefined)
+                assert.strictEqual(lw.cache.get(texPath)?.content, '\\section{second}')
+
+                secondParse.resolve(undefined)
+                await secondRefresh
+            } finally {
+                firstParse.resolve(undefined)
+                secondParse.resolve(undefined)
+                if (firstRefresh && secondRefresh) {
+                    await Promise.allSettled([firstRefresh, secondRefresh])
+                }
+                parseStub.reset()
+            }
+        })
+
+        it('should keep refresh completion side effects after reset removes an in-progress cache', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const parseStub = lw.parser.parse.tex as sinon.SinonStub
+            const eventStub = lw.event.fire as sinon.SinonStub
+            const pendingParse = deferred<any>()
+            parseStub.reset()
+            eventStub.resetHistory()
+            parseStub.returns(pendingParse.promise)
+
+            let refresh: ReturnType<typeof lw.cache.refreshCache> | undefined
+            try {
+                refresh = lw.cache.refreshCache(texPath)
+                await waitFor(() => parseStub.calledOnce)
+                assert.ok(lw.cache.get(texPath))
+                assert.ok(lw.cache.promises.has(texPath))
+
+                lw.cache.reset()
+
+                assert.strictEqual(lw.cache.get(texPath), undefined)
+                assert.ok(lw.cache.promises.has(texPath))
+
+                pendingParse.resolve(undefined)
+                await refresh
+
+                assert.strictEqual(lw.cache.get(texPath), undefined)
+                sinon.assert.calledWith(eventStub, lw.event.FileParsed, texPath)
+            } finally {
+                pendingParse.resolve(undefined)
+                if (refresh) {
+                    await Promise.allSettled([refresh])
+                }
+                parseStub.reset()
+            }
+        })
+
+        it('should keep refresh completion side effects after deletion removes an in-progress cache', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const uri = vscode.Uri.file(texPath)
+            const parseStub = lw.parser.parse.tex as sinon.SinonStub
+            const eventStub = lw.event.fire as sinon.SinonStub
+            const pendingParse = deferred<any>()
+            parseStub.reset()
+            eventStub.resetHistory()
+            parseStub.returns(pendingParse.promise)
+            set.config('latex.watch.delay', 0)
+            lw.cache.add(texPath)
+
+            let refresh: ReturnType<typeof lw.cache.refreshCache> | undefined
+            let existsStub: sinon.SinonStub | undefined
+            try {
+                refresh = lw.cache.refreshCache(texPath)
+                await waitFor(() => parseStub.calledOnce)
+                existsStub = sinon.stub(lw.file, 'exists').resolves(false)
+
+                await sourceWatcherTestHooks.onDidDelete(uri)
+
+                assert.strictEqual(lw.cache.get(texPath), undefined)
+                assert.ok(lw.cache.promises.has(texPath))
+
+                pendingParse.resolve(undefined)
+                await refresh
+
+                assert.strictEqual(lw.cache.get(texPath), undefined)
+                sinon.assert.calledWith(eventStub, lw.event.FileParsed, texPath)
+            } finally {
+                existsStub?.restore()
+                pendingParse.resolve(undefined)
+                if (refresh) {
+                    await Promise.allSettled([refresh])
+                }
+                parseStub.reset()
+            }
         })
     })
 
@@ -919,6 +1117,19 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             await lw.cache.refreshCache(toParse)
             await lw.cache.loadFlsFile(toParse)
             assert.ok(lw.watcher.bib.has(vscode.Uri.file(get.path(fixture, 'load_aux_file', 'main.bib'))))
+        })
+
+        it('should attach AUX bibliography data to the current root instead of the FLS owner', async () => {
+            const rootPath = set.root(fixture, 'another.tex')
+            const flsOwner = get.path(fixture, 'load_aux_file', 'main.tex')
+            const bibPath = get.path(fixture, 'main.bib')
+            await lw.cache.refreshCache(rootPath)
+            await lw.cache.refreshCache(flsOwner)
+
+            await lw.cache.loadFlsFile(flsOwner)
+
+            assert.listStrictEqual(Array.from(lw.cache.get(rootPath)?.bibfiles ?? []), [bibPath])
+            assert.listStrictEqual(Array.from(lw.cache.get(flsOwner)?.bibfiles ?? []), [])
         })
     })
 

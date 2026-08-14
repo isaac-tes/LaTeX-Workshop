@@ -8,7 +8,7 @@ new repository facts conflict with the plan or require a behavioral decision.
 Behavior outside the decisions recorded here must not be changed without a new
 review.
 
-Current status: **Planning complete; implementation not started.**
+Current status: **Phase 0 complete; implementation not started.**
 
 The migration must remain incremental and reversible. Structural moves, test
 moves, and behavior changes belong in separate commits whenever practical.
@@ -386,9 +386,10 @@ tests execute `out/**/*.js`, while source maps remap coverage to `src/**/*.ts`.
 For every phase, fill in **Coverage evidence** with the actual per-file four
 metric values before checking the phase complete.
 
-### [ ] Phase 0: Baseline and characterization tests
+### [x] Phase 0: Baseline and characterization tests
 
-**Status:** Not started.
+**Status:** Complete on 2026-08-14. This phase changed tests and this migration
+document only; no production source or fixture changed.
 
 **Goal:** Establish behavior before moving implementation.
 
@@ -411,8 +412,30 @@ comments yet.
 **Tests to move/add:** Baseline tests that will later move into all six target
 test files.
 
-**Coverage evidence:** Pending: record statements, branches, functions, and
-lines for `src/core/cache.ts`.
+**Characterization evidence:** The baseline now covers import-time source
+watcher change and deletion callbacks, AST failure after partial-cache creation,
+same-file refresh concurrency, reset and deletion during an in-flight refresh,
+and AUX bibliography ownership. In particular, AUX `\bibdata{main}` is
+resolved relative to the current global root's directory and attached to that
+root cache, even when the AUX file was loaded for a different FLS owner.
+
+Direct `cache.promises` test access is confined to
+`test/units/01_core/cache.test.ts`. At Phase 0 completion it has eight direct
+assertions, covering `wait`, normal refresh cleanup, failed refresh cleanup,
+same-file concurrent refresh bookkeeping, reset during refresh, and deletion
+during refresh. Phase 8 must replace all eight with behavior-based assertions
+before removing the compatibility property.
+
+**Coverage evidence:** The scoped c8 run reported the following values for
+`src/core/cache.ts`: statements **100%**, branches **100%**, functions **100%**,
+and lines **100%**. The report's `All files` row also reported 100% for all four
+metrics.
+
+**Verification evidence:** All commands ran directly with Node `v20.20.2` from
+`/Users/jqyu/.npm/_npx/ebaba8b9e55fd0a9/node_modules/node/bin/node` as required.
+Both `tsc -p tsconfig.json` and `tsc -p viewer/tsconfig.json` passed. The focused
+cache suite passed with **102 passing**, the full suite passed with **1108
+passing**, and the scoped `c8 --all --per-file --100` run exited successfully.
 
 **Verification commands:** Node 20 setup, `npm run compile`, relevant unit tests,
 full `npm run test`, and the scoped c8 command above.
