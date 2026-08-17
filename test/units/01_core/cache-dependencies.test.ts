@@ -177,11 +177,8 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     describe('getIncludedTeX', () => {
         const lookup = (filePath: string) => caches.get(filePath)
 
-        it('should return the supplied Set unchanged without a starting file', () => {
-            const included = new Set(['/seed.tex'])
-            const result = getIncludedTeX(undefined, lookup, included)
-            assert.strictEqual(result, included)
-            assert.deepStrictEqual([...result], ['/seed.tex'])
+        it('should return an empty Set without a starting file', () => {
+            assert.deepStrictEqual([...getIncludedTeX(undefined, lookup)], [])
         })
 
         it('should return an empty Set when the starting file is not cached', () => {

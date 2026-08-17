@@ -58,17 +58,6 @@ export class Cache implements vscode.Disposable {
         )
     }
 
-    /**
-     * Compatibility access to the mutable in-flight map. New code should rely
-     * on refresh and wait behavior instead of observing this implementation
-     * detail.
-     *
-     * @deprecated This property will be removed in Phase 8.
-     */
-    get promises(): Map<string, Promise<void>> {
-        return this.store.promises
-    }
-
     /** Handles a source change delivered by this instance's watcher subscription. */
     private handleWatchedFileChange(uri: vscode.Uri): void {
         const filePath = uri.fsPath
@@ -173,23 +162,11 @@ export class Cache implements vscode.Disposable {
     }
 
     /**
-     * Waits for a file to be cached, with a specified timeout.
-     *
-     * This function monitors the caching status of a specified file path. It
-     * continuously checks if the file has been cached by looking up its promise and
-     * cache entries. If the file is not found in the cache within the default or
-     * provided timeout duration, it forces the cache to refresh for the file. The
-     * function waits in increments of 100 milliseconds, and if the total wait time
-     * exceeds the specified timeout (default is 2 seconds), it logs an error
-     * message and invokes the `refreshCache` function to cache the file forcibly.
-     *
-     * @param {string} filePath - The path to the file to wait for caching.
-     * @param {number} [seconds=2] - The number of seconds to wait before forcing
-     * the cache refresh.
-     * @returns {Promise<void> | undefined} - A promise that resolves when the file
-     * is cached, or undefined if the cache is not refreshed.
+     * Waits for the current refresh of a file to finish. If no refresh starts
+     * within the timeout, one is forced. The returned promise resolves only after
+     * that final refresh queue settles and rejects when the refresh fails.
      */
-    async wait(filePath: string, seconds: number = 2): Promise<Promise<void> | undefined> {
+    async wait(filePath: string, seconds: number = 2): Promise<void> {
         this.assertActive()
         let waited = 0
         while (this.store.getInFlight(filePath) === undefined && this.get(filePath) === undefined) {
@@ -203,7 +180,7 @@ export class Cache implements vscode.Disposable {
                 break
             }
         }
-        return this.store.getInFlight(filePath)
+        await this.store.getInFlight(filePath)
     }
 
     /**
@@ -247,28 +224,11 @@ export class Cache implements vscode.Disposable {
     }
 
     /**
-     * Refreshes the cache for a given file, optionally considering a root path.
-     *
-     * This function is responsible for updating the cache of a file specified by
-     * its path. It first checks if the file should be excluded or can be cached
-     * based on predefined conditions. If the file is valid for caching, it logs the
-     * caching action, increases the count of files being cached, and reads the
-     * content of the file. The content is then processed to remove comments and
-     * verbatim sections, and a `FileCache` object is created to store this
-     * processed content along with other metadata. The function then updates the
-     * children elements of the file cache and initiates the AST update. Once the
-     * AST is updated, the elements of the file cache are also updated. Finally, it
-     * performs lint checks, decreases the caching file count, removes the promise
-     * from the active promises, fires a file parsed event, and reconstructs the
-     * outline if no other files are being cached.
-     *
-     * @param {string} filePath - The path to the file to be cached.
-     * @param {string} [rootPath] - The optional root path to be considered for
-     * updating children elements.
-     * @returns {Promise<void> | undefined} - A promise that resolves when the cache
-     * is refreshed, or undefined if the file is excluded or cannot be cached.
+     * Refreshes one cache entry and any same-file rerun queued while it is active.
+     * The returned promise resolves after the final queued result is committed, or
+     * immediately for an ineligible file, and rejects if the final refresh fails.
      */
-    async refreshCache(filePath: string, rootPath?: string): Promise<Promise<void> | undefined> {
+    async refreshCache(filePath: string, rootPath?: string): Promise<void> {
         this.assertActive()
         if (this.isExcluded(filePath)) {
             logger.log(`File is excluded from caching: ${filePath} .`)
@@ -290,7 +250,8 @@ export class Cache implements vscode.Disposable {
             // Only the latest pending request matters because every queued caller
             // waits for the same queue to become stable.
             this.pendingRefreshes.set(cacheKey, request)
-            return activeTask
+            await activeTask
+            return
         }
 
         const task = this.runRefreshQueue(cacheKey, request)
@@ -299,7 +260,7 @@ export class Cache implements vscode.Disposable {
                 this.store.deleteInFlight(filePath)
             })
         this.store.setInFlight(filePath, task)
-        return task
+        await task
     }
 
     /**
@@ -720,13 +681,13 @@ export class Cache implements vscode.Disposable {
      *
      * @param {string} [filePath] - The path to the starting file. Defaults to the
      * root file path.
-     * @returns {string[]} - An array of paths to included TeX files.
+     * @returns {Set<string>} The included TeX paths in depth-first order.
      */
-    getIncludedTeX(filePath?: string, includedTeX = new Set<string>()): Set<string> {
+    getIncludedTeX(filePath?: string): Set<string> {
         if (this.disposed) {
             return new Set()
         }
-        return dependencies.getIncludedTeX(filePath ?? lw.root.file.path, cachePath => this.get(cachePath), includedTeX)
+        return dependencies.getIncludedTeX(filePath ?? lw.root.file.path, cachePath => this.get(cachePath))
     }
 
     /**

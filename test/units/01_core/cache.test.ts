@@ -239,8 +239,6 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 assert.strictEqual(second.get(texPath), undefined)
                 assert.strictEqual(first.get(anotherPath), undefined)
                 assert.ok(second.get(anotherPath))
-                assert.notStrictEqual(first.promises, second.promises)
-
                 first.reset()
                 assert.listStrictEqual(first.paths(), [])
                 assert.listStrictEqual(second.paths(), [anotherPath])
@@ -263,7 +261,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.deepStrictEqual(instance.paths(), [])
             assert.deepStrictEqual(instance.getIncludedBib(texPath), [])
             assert.deepStrictEqual(instance.getIncludedGlossaryBib(texPath), [])
-            assert.deepStrictEqual([...instance.getIncludedTeX(texPath, new Set(['/old.tex']))], [])
+            assert.deepStrictEqual([...instance.getIncludedTeX(texPath)], [])
             assert.throws(() => instance.add(texPath), /Cache instance has been disposed/)
             assert.throws(() => instance.refreshCacheAggressive(texPath), /Cache instance has been disposed/)
             await assert.rejects(instance.refreshCache(texPath), /Cache instance has been disposed/)
@@ -415,7 +413,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const texPath = get.path(fixture, 'main.tex')
 
             lw.cache.add(texPath)
-            assert.strictEqual(lw.cache.promises.get(texPath), undefined)
+            assert.strictEqual(lw.cache.get(texPath), undefined)
         })
     })
 
@@ -477,6 +475,18 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             void lw.cache.refreshCache(texPath)
             await wait
             assert.ok(lw.cache.get(texPath))
+        })
+
+        it('should propagate a forced refresh failure', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const refreshStub = sinon.stub(lw.cache, 'refreshCache').rejects(new Error('forced refresh failure'))
+
+            try {
+                await assert.rejects(lw.cache.wait(texPath, 0), /forced refresh failure/)
+                sinon.assert.calledOnceWithExactly(refreshStub, texPath)
+            } finally {
+                refreshStub.restore()
+            }
         })
     })
 
@@ -563,9 +573,9 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const originalRefresh = instance.refreshCache.bind(instance)
             const refreshStub = sinon.stub(instance, 'refreshCache').callsFake(refreshPath => {
                 if (refreshPath === childPath) {
-                    return Promise.reject<Promise<void> | undefined>(new Error('detached child failure'))
+                    return Promise.reject(new Error('detached child failure'))
                 }
-                return Promise.resolve(undefined)
+                return Promise.resolve()
             })
             const addStub = sinon.stub(instance, 'add')
 
@@ -643,11 +653,11 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.strictEqual(lw.cache.get(texPath)?.content, '')
         })
 
-        it('should manage caching promises properly', async () => {
+        it('should resolve refresh only after the cache is committed', async () => {
             const texPath = get.path(fixture, 'main.tex')
 
             await lw.cache.refreshCache(texPath)
-            assert.ok(!lw.cache.promises.get(texPath))
+            assert.ok(lw.cache.get(texPath))
         })
 
         it('should refresh cache if content is changed', async () => {
@@ -678,10 +688,14 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
                 const cached = lw.cache.get(texPath)
                 assert.strictEqual(cached?.content, '%')
-                assert.strictEqual(lw.cache.promises.get(texPath), undefined)
                 sinon.assert.notCalled(eventStub)
                 sinon.assert.notCalled(outlineStub)
                 assert.hasLog(`Failed caching ${texPath} at ast stage: Error: characterized parse failure`)
+
+                parseStub.reset()
+                parseStub.resolves(undefined)
+                await lw.cache.refreshCache(texPath)
+                assert.strictEqual(lw.cache.get(texPath)?.content, '\\section{failed}')
             } finally {
                 documentStub.restore()
                 parseStub.reset()
@@ -777,8 +791,6 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
                 await sleep(20)
                 assert.strictEqual(parseStub.callCount, 1)
-                assert.ok(lw.cache.promises.has(texPath))
-
                 firstParse.resolve(undefined)
                 await waitFor(() => parseStub.callCount === 2)
                 documentStub.restore()
@@ -789,7 +801,6 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 secondParse.resolve(undefined)
                 await Promise.all([firstRefresh, secondRefresh])
                 assert.strictEqual(lw.cache.get(texPath)?.content, '\\section{second}')
-                assert.strictEqual(lw.cache.promises.get(texPath), undefined)
             } finally {
                 firstParse.resolve(undefined)
                 secondParse.resolve(undefined)
@@ -843,9 +854,6 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const secondRefresh = lw.cache.refreshCache(secondPath)
             try {
                 await waitFor(() => parseStub.callCount === 2)
-                assert.ok(lw.cache.promises.has(firstPath))
-                assert.ok(lw.cache.promises.has(secondPath))
-
                 firstParse.resolve(undefined)
                 secondParse.resolve(undefined)
                 await Promise.all([firstRefresh, secondRefresh])
@@ -919,12 +927,16 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 refresh = lw.cache.refreshCache(texPath)
                 await waitFor(() => parseStub.calledOnce)
                 assert.strictEqual(lw.cache.get(texPath), undefined)
-                assert.ok(lw.cache.promises.has(texPath))
+                let refreshSettled = false
+                void refresh.then(() => {
+                    refreshSettled = true
+                })
 
                 lw.cache.reset()
 
                 assert.strictEqual(lw.cache.get(texPath), undefined)
-                assert.ok(lw.cache.promises.has(texPath))
+                await sleep(20)
+                assert.strictEqual(refreshSettled, false)
 
                 pendingParse.resolve(undefined)
                 await refresh
@@ -964,7 +976,12 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 await sourceWatcherTestHooks.onDidDelete(uri)
 
                 assert.strictEqual(lw.cache.get(texPath), undefined)
-                assert.ok(lw.cache.promises.has(texPath))
+                let refreshSettled = false
+                void refresh.then(() => {
+                    refreshSettled = true
+                })
+                await sleep(20)
+                assert.strictEqual(refreshSettled, false)
 
                 pendingParse.resolve(undefined)
                 await Promise.all([refresh, queuedRefresh])
@@ -1451,17 +1468,17 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     })
 
     describe('lw.cache.getIncludedTeX coordination', () => {
-        it('should resolve the current root and forward the compatibility Set', () => {
+        it('should resolve the current root and forward an inline cache lookup', () => {
             const rootPath = set.root(fixture, 'main.tex')
             const includedTeX = new Set(['/seed.tex'])
             const includedStub = sinon.stub(dependencies, 'getIncludedTeX').returns(includedTeX)
 
-            const result = lw.cache.getIncludedTeX(undefined, includedTeX)
-            const [filePath, , forwardedSet] = includedStub.firstCall.args
+            const result = lw.cache.getIncludedTeX()
+            const [filePath] = includedStub.firstCall.args
 
             assert.strictEqual(result, includedTeX)
             assert.strictEqual(filePath, rootPath)
-            assert.strictEqual(forwardedSet, includedTeX)
+            assert.strictEqual(includedStub.firstCall.args.length, 2)
             assert.strictEqual(typeof includedStub.firstCall.args[1], 'function')
         })
     })

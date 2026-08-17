@@ -188,7 +188,7 @@ compatible:
 add(filePath: string): void
 get(filePath: string): FileCache | undefined
 paths(): string[]
-getIncludedTeX(filePath?: string, includedTeX?: Set<string>): Set<string>
+getIncludedTeX(filePath?: string): Set<string>
 getIncludedBib(filePath?: string): string[]
 getIncludedGlossaryBib(filePath?: string): string[]
 getFlsChildren(texFile: string): Promise<string[]>
@@ -478,7 +478,7 @@ and AUX bibliography ownership. In particular, AUX `\bibdata{main}` is
 resolved relative to the current global root's directory and attached to that
 root cache, even when the AUX file was loaded for a different FLS owner.
 
-Direct `cache.promises` test access is confined to
+Direct access to the raw in-flight Map is confined to
 `test/units/01_core/cache.test.ts`. At Phase 0 completion it has eight direct
 assertions, covering `wait`, normal refresh cleanup, failed refresh cleanup,
 same-file concurrent refresh bookkeeping, reset during refresh, and deletion
@@ -1060,9 +1060,9 @@ the exact expl3 basename rule.
   per-file coverage reported **100%** for all four metrics under Node
   `v20.20.2`.
 
-### [ ] Phase 8: Clean up the public cache API
+### [x] Phase 8: Clean up the public cache API
 
-**Status:** Not started.
+**Status:** Completed on 2026-08-17.
 
 **Goal:** Complete the three approved public API exceptions.
 
@@ -1072,10 +1072,10 @@ and any TypeScript callers affected by the normalized signatures.
 **Behavior policy:** Do not change runtime behavior beyond removing external
 mutable in-flight access.
 
-**Implementation notes:** Replace remaining tests of `cache.promises` with
-behavioral assertions, remove the deprecated getter, and use `Promise<void>` for
-`refreshCache` and `wait`. Remove the second `getIncludedTeX` accumulator
-argument and keep its traversal Set private to `dependencies.ts`.
+**Implementation notes:** All tests of the raw in-flight Map were replaced with
+behavioral assertions, the deprecated getter was removed, and `refreshCache`
+and `wait` now return `Promise<void>`. The second `getIncludedTeX` accumulator
+argument was removed, and its traversal Set is private to `dependencies.ts`.
 
 **Required comments:** Public JSDoc must state final wait/refresh completion and
 error semantics.
@@ -1083,10 +1083,15 @@ error semantics.
 **Tests to move/add:** Compile-time call-site audit and behavior tests for queue
 completion instead of internal Map inspection.
 
-**Coverage evidence:** Pending for all cache files.
+**Coverage evidence:** Completed under Node `v20.20.2`. The cache suite passed
+with **117 passing**. Scoped per-file c8 coverage reported **100% statements,
+branches, functions, and lines** for `cache.ts`, `auxiliaries.ts`,
+`bibliography.ts`, `dependencies.ts`, and `store.ts`. The full suite passed with
+**1126 passing**; lint and both the extension and viewer TypeScript builds also
+passed.
 
 **Verification commands:** Standard Node 20 verification suite plus repository
-search confirming no `cache.promises` references remain.
+search confirming no raw in-flight Map access remains.
 
 **Suggested commit boundary:** API cleanup only.
 
@@ -1136,7 +1141,7 @@ The migration is complete only when:
 - the one-way internal coordination flow is in place;
 - all approved concurrency, lifecycle, error, path, and dependency semantics are
   covered by tests;
-- no production or test code accesses `cache.promises`;
+- no production or test code accesses the raw in-flight Map;
 - all relevant files report 100% for all four coverage metrics under Node 20;
 - compile, lint, focused tests, and the full repository test suite pass;
 - critical and complex methods contain concise English design comments.

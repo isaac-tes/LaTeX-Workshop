@@ -40,12 +40,11 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         const second = new CacheStore()
         const task = Promise.resolve()
 
-        first.promises.set('/first.tex', task)
+        first.setInFlight('/first.tex', task)
         first.clear()
 
-        assert.strictEqual(first.promises.get('/first.tex'), task)
-        assert.strictEqual(second.promises.get('/first.tex'), undefined)
-        assert.notStrictEqual(first.promises, second.promises)
+        assert.strictEqual(first.getInFlight('/first.tex'), task)
+        assert.strictEqual(second.getInFlight('/first.tex'), undefined)
     })
 
     it('should use normalized identity while preserving the latest original path', () => {

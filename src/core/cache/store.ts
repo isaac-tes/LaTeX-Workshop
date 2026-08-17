@@ -51,8 +51,4 @@ export class CacheStore {
     deleteInFlight(filePath: string): boolean {
         return this.inFlight.delete(CacheStore.normalizePath(filePath))
     }
-
-    get promises(): Map<string, Promise<void>> {
-        return this.inFlight
-    }
 }

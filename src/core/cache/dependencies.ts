@@ -96,15 +96,16 @@ async function* discoverExternalDependencies(source: DependencySource, rootPath:
 }
 
 /**
- * Traverses cached TeX dependencies depth first. The caller-provided Set is the
- * cycle guard, preserves insertion order, and is returned unchanged for current
- * API compatibility.
+ * Traverses cached TeX dependencies depth first. The private result Set also
+ * guards cycles by normalized identity while preserving first-seen source paths
+ * and depth-first insertion order for callers.
  */
-export function getIncludedTeX(filePath: string | undefined, getCache: CacheLookup, includedTeX = new Set<string>()): Set<string> {
+export function getIncludedTeX(filePath: string | undefined, getCache: CacheLookup): Set<string> {
+    const includedTeX = new Set<string>()
     if (filePath === undefined) {
         return includedTeX
     }
-    const checked = new Set(Array.from(includedTeX, includedPath => CacheStore.normalizePath(includedPath)))
+    const checked = new Set<string>()
 
     function visit(currentPath: string, traverseExisting = false): void {
         const fileCache = getCache(currentPath)
