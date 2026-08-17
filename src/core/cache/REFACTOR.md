@@ -8,7 +8,7 @@ new repository facts conflict with the plan or require a behavioral decision.
 Behavior outside the decisions recorded here must not be changed without a new
 review.
 
-Current status: **Phase 6 complete; Phase 7 not started.**
+Current status: **Phase 7 complete; Phase 8 not started.**
 
 The migration must remain incremental and reversible. Structural moves, test
 moves, and behavior changes belong in separate commits whenever practical.
@@ -950,9 +950,9 @@ and file suites, full tests, and the scoped per-file c8 command.
 
 **Rollback point:** The completed Phase 5 commit.
 
-### [ ] Phase 7: Apply approved lifecycle and concurrency fixes
+### [x] Phase 7: Apply approved lifecycle and concurrency fixes
 
-**Status:** Not started.
+**Status:** Complete on 2026-08-17.
 
 **Goal:** Implement the approved behavior described above.
 
@@ -975,10 +975,15 @@ have their final design comments.
 dispose, concurrency, debounce, path, and recursion branch. Include Windows path
 and drive-letter cases.
 
-**Coverage evidence:** Pending for all cache files after every semantic commit.
+**Coverage evidence:** Every semantic commit passed the scoped per-file gate.
+The final run reported statements **100%**, branches **100%**, functions
+**100%**, and lines **100%** separately for `src/core/cache.ts` and every file
+under `src/core/cache/`.
 
-**Verification commands:** Standard Node 20 verification suite after each
-semantic commit.
+**Verification commands:** Every commit used Node `v20.20.2`. The final cache
+suite passed with **116 passing**, and the full suite passed with **1125
+passing**. Full-repository ESLint, both TypeScript compilations, and
+`git diff --check` passed.
 
 **Suggested commit boundary:** One approved behavior family per commit.
 
@@ -1047,7 +1052,13 @@ the exact expl3 basename rule.
   uses normalized cycle/resource identity while returning first-seen original
   paths. The cache suite passed with **114 passing**, and scoped per-file
   coverage reported **100%** for all four metrics under Node `v20.20.2`.
-- [ ] Match the expl3 exclusion by exact basename.
+- [x] Match the expl3 exclusion by exact basename. Completed on 2026-08-17. The
+  exclusion is an exact, case-sensitive basename comparison and handles
+  Windows-style paths independently of the host platform. Directory matches,
+  longer basenames, and case variants remain cacheable. The cache suite passed
+  with **116 passing**, the full suite passed with **1125 passing**, and scoped
+  per-file coverage reported **100%** for all four metrics under Node
+  `v20.20.2`.
 
 ### [ ] Phase 8: Clean up the public cache API
 

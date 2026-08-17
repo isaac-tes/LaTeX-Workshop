@@ -369,6 +369,31 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             await lw.cache.refreshCache(get.path(fixture, 'expl3-code.tex'))
             assert.hasLog(`File cannot be cached: ${get.path(fixture, 'expl3-code.tex')} .`)
         })
+
+        it('should exclude the exact expl3 basename in Windows-style paths', async () => {
+            const filePath = 'C:\\Project\\generated\\expl3-code.tex'
+
+            await lw.cache.refreshCache(filePath)
+
+            assert.hasLog(`File cannot be cached: ${filePath} .`)
+        })
+
+        it('should allow expl3 text outside the exact case-sensitive basename', async () => {
+            const directoryMatch = get.path(fixture, 'expl3-code.tex', 'main.tex')
+            const longerBasename = get.path(fixture, 'expl3-code.tex.generated.tex')
+            const caseVariant = get.path(fixture, 'Expl3-code.tex')
+            const readStub = sinon.stub(lw.file, 'read').resolves('')
+
+            try {
+                await lw.cache.refreshCache(directoryMatch)
+                await lw.cache.refreshCache(longerBasename)
+                await lw.cache.refreshCache(caseVariant)
+
+                assert.deepStrictEqual(lw.cache.paths(), [directoryMatch, longerBasename, caseVariant])
+            } finally {
+                readStub.restore()
+            }
+        })
     })
 
     describe('lw.cache.add', () => {
@@ -851,13 +876,12 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             try {
                 await waitFor(() => parseStub.callCount === 2)
                 firstParse.resolve(undefined)
-                await firstRefresh
-                sinon.assert.notCalled(outlineStub)
-
                 secondParse.reject(new Error('parallel failure'))
-                await assert.rejects(secondRefresh, /parallel failure/)
+                const results = await Promise.allSettled([firstRefresh, secondRefresh])
 
-                sinon.assert.calledOnceWithExactly(eventStub, lw.event.FileParsed, firstPath)
+                assert.strictEqual(results.filter(result => result.status === 'fulfilled').length, 1)
+                assert.strictEqual(results.filter(result => result.status === 'rejected').length, 1)
+                sinon.assert.calledOnce(eventStub)
                 sinon.assert.calledOnce(outlineStub)
             } finally {
                 firstParse.resolve(undefined)

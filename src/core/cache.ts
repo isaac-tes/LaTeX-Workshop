@@ -86,20 +86,10 @@ export class Cache implements vscode.Disposable {
         }
     }
 
-    /**
-     * Determines if a file can be cached based on its extension and specific
-     * exclusions.
-     *
-     * This function checks if a given file path has a TeX file extension with
-     * lw.file.hasTeXExt and does not include the string 'expl3-code.tex'.
-     *
-     * @param {string} filePath - The path to the file to be checked for cache
-     * eligibility.
-     * @returns {boolean} - Returns `true` if the file can be cached, otherwise
-     * `false`.
-     */
+    /** Accepts supported TeX sources except the exact generated expl3 basename. */
     private canCache(filePath: string): boolean {
-        return lw.file.hasTeXExt(path.extname(filePath)) && !filePath.includes('expl3-code.tex')
+        const basename = filePath.includes('\\') ? path.win32.basename(filePath) : path.basename(filePath)
+        return lw.file.hasTeXExt(path.extname(filePath)) && basename !== 'expl3-code.tex'
     }
 
     /**
