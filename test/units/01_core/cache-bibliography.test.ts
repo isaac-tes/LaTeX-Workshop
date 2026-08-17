@@ -10,6 +10,7 @@ import {
     getIncludedBib,
     getIncludedGlossaryBib
 } from '../../../src/core/cache/bibliography'
+import { CacheStore } from '../../../src/core/cache/store'
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     const fixture = get.path('01_core', 'cache')
@@ -200,6 +201,25 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.deepStrictEqual(getIncludedGlossaryBib(root.filePath, lookup), [
                 '/glossary/root.bib', '/glossary/shared.bib', '/glossary/deep.bib', '/glossary/second.bib'
             ])
+        })
+
+        it('should normalize TeX and bibliography identity while preserving first paths', () => {
+            const root = createFileCache('C:\\Project\\root.tex')
+            const child = createFileCache('C:\\Project\\child.tex')
+            const firstChildPath = 'c:/Project/nested/../child.tex'
+            const firstBibPath = 'C:\\Project\\refs\\..\\main.bib'
+            root.children.push(
+                {filePath: firstChildPath, index: 0},
+                {filePath: child.filePath, index: 1}
+            )
+            child.children.push({filePath: 'c:/Project/root.tex', index: 0})
+            root.bibfiles.add(firstBibPath)
+            child.bibfiles.add('c:/Project/main.bib')
+            caches.set(CacheStore.normalizePath(root.filePath), root)
+            caches.set(CacheStore.normalizePath(child.filePath), child)
+            const normalizedLookup = (filePath: string) => caches.get(CacheStore.normalizePath(filePath))
+
+            assert.deepStrictEqual(getIncludedBib(root.filePath, normalizedLookup), [firstBibPath])
         })
     })
 })

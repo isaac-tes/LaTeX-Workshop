@@ -2,6 +2,7 @@ import * as path from 'path'
 
 import { lw } from '../../lw'
 import type { FileCache } from '../../types'
+import { CacheStore } from './store'
 
 export type CacheLookup = (filePath: string) => FileCache | undefined
 
@@ -72,34 +73,44 @@ export function getIncludedGlossaryBib(filePath: string | undefined, getCache: C
 
 /**
  * Traverses only TeX child edges in depth-first order; XR external edges belong
- * to separate roots. checkedTeX prevents cycles, while final Set conversion
- * de-duplicates resources without changing their first encounter order.
+ * to separate roots. Normalized identity prevents equivalent TeX paths from
+ * cycling and de-duplicates resources without changing their first encounter.
  */
 function getIncludedBibGeneric(
     bibType: 'bibtex' | 'glossary',
     filePath: string | undefined,
-    getCache: CacheLookup,
-    includedBib: string[] = [],
-    checkedTeX: string[] = []
+    getCache: CacheLookup
 ): string[] {
     if (filePath === undefined) {
         return []
     }
-    const fileCache = getCache(filePath)
-    if (fileCache === undefined) {
-        return []
-    }
-    checkedTeX.push(filePath)
-    if (bibType === 'bibtex') {
-        includedBib.push(...fileCache.bibfiles)
-    } else if (bibType === 'glossary') {
-        includedBib.push(...fileCache.glossarybibfiles)
-    }
-    for (const child of fileCache.children) {
-        if (checkedTeX.includes(child.filePath)) {
-            continue
+    const includedBib: string[] = []
+    const checkedTeX = new Set<string>()
+    const checkedBib = new Set<string>()
+
+    function visit(currentPath: string): void {
+        const cacheKey = CacheStore.normalizePath(currentPath)
+        if (checkedTeX.has(cacheKey)) {
+            return
         }
-        getIncludedBibGeneric(bibType, child.filePath, getCache, includedBib, checkedTeX)
+        const fileCache = getCache(currentPath)
+        if (fileCache === undefined) {
+            return
+        }
+        checkedTeX.add(cacheKey)
+        const bibfiles = bibType === 'bibtex' ? fileCache.bibfiles : fileCache.glossarybibfiles
+        for (const bibPath of bibfiles) {
+            const bibKey = CacheStore.normalizePath(bibPath)
+            if (!checkedBib.has(bibKey)) {
+                checkedBib.add(bibKey)
+                includedBib.push(bibPath)
+            }
+        }
+        for (const child of fileCache.children) {
+            visit(child.filePath)
+        }
     }
-    return Array.from(new Set(includedBib))
+
+    visit(filePath)
+    return includedBib
 }

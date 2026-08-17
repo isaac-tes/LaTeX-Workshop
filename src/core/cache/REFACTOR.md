@@ -1040,7 +1040,13 @@ per-file aggressive-refresh debounce.
 This subphase contains separate commits for dependency ordering/identity and
 the exact expl3 basename rule.
 
-- [ ] Preserve source dependency order and normalized first-occurrence identity.
+- [x] Preserve source dependency order and normalized first-occurrence identity.
+  Completed on 2026-08-17. Source children are committed in textual-index order,
+  normalized identity preserves the first source path/index, and FLS-only
+  children remain unique at the end. TeX and bibliography graph traversal also
+  uses normalized cycle/resource identity while returning first-seen original
+  paths. The cache suite passed with **114 passing**, and scoped per-file
+  coverage reported **100%** for all four metrics under Node `v20.20.2`.
 - [ ] Match the expl3 exclusion by exact basename.
 
 ### [ ] Phase 8: Clean up the public cache API

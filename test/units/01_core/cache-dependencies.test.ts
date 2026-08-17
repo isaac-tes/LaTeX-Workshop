@@ -4,11 +4,13 @@ import * as sinon from 'sinon'
 import { assert, get, mock, set } from '../utils'
 import { lw } from '../../../src/lw'
 import type { FileCache } from '../../../src/types'
+import * as coreUtils from '../../../src/utils/utils'
 import {
     type DependencyDiscovery,
     discoverDependencies,
     getIncludedTeX
 } from '../../../src/core/cache/dependencies'
+import { CacheStore } from '../../../src/core/cache/store'
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     const fixture = get.path('01_core', 'cache')
@@ -90,7 +92,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.deepStrictEqual(await discover(fileCache, rootPath), [])
         })
 
-        it('should preserve input order, roots, first indices, and exact-path de-duplication', async () => {
+        it('should preserve input order, roots, first indices, and normalized de-duplication', async () => {
             const rootPath = get.path(fixture, 'another.tex')
             const mainPath = get.path(fixture, 'main.tex')
             const fileCache = await readFileCache('update_children', 'two_same_inputs.tex')
@@ -100,7 +102,10 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 kind: 'input', filePath: mainPath, index: firstIndex, rootPath
             }])
 
-            fileCache.children.push({filePath: mainPath, index: -1})
+            fileCache.children.push({
+                filePath: path.join(path.dirname(mainPath), 'nested', '..', path.basename(mainPath)),
+                index: -1
+            })
             assert.deepStrictEqual(await discover(fileCache, rootPath), [])
         })
 
@@ -159,6 +164,14 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const otherRoot = get.path(fixture, 'main.tex')
             assert.pathStrictEqual((await discover(source, otherRoot))[0].filePath, externalPath)
         })
+
+        it('should reject an external document equivalent to the normalized root', async () => {
+            const source = createFileCache('C:\\Project\\source.tex', '\\externaldocument{root}')
+            sandbox.stub(coreUtils, 'resolveFile').resolves('c:/Project/nested/../root.tex')
+            sandbox.stub(lw.file, 'exists').resolves({type: 1, ctime: 0, mtime: 0, size: 0})
+
+            assert.deepStrictEqual(await discover(source, 'C:\\Project\\root.tex'), [])
+        })
     })
 
     describe('getIncludedTeX', () => {
@@ -190,6 +203,25 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.deepStrictEqual(
                 [...getIncludedTeX(root.filePath, lookup)],
                 [root.filePath, first.filePath, shared.filePath, second.filePath]
+            )
+        })
+
+        it('should traverse and return only the first form of equivalent Windows paths', () => {
+            const root = createFileCache('C:\\Project\\root.tex')
+            const child = createFileCache('C:\\Project\\child.tex')
+            const firstChildPath = 'c:/Project/nested/../child.tex'
+            root.children.push(
+                {filePath: firstChildPath, index: 0},
+                {filePath: child.filePath, index: 1}
+            )
+            child.children.push({filePath: 'c:/Project/root.tex', index: 0})
+            caches.set(CacheStore.normalizePath(root.filePath), root)
+            caches.set(CacheStore.normalizePath(child.filePath), child)
+            const normalizedLookup = (filePath: string) => caches.get(CacheStore.normalizePath(filePath))
+
+            assert.deepStrictEqual(
+                [...getIncludedTeX(root.filePath, normalizedLookup)],
+                [root.filePath, firstChildPath]
             )
         })
     })

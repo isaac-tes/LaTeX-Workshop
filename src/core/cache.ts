@@ -378,6 +378,10 @@ export class Cache implements vscode.Disposable {
             if (!this.isCurrent(request)) {
                 return
             }
+            // Input scanners can yield macro families in separate passes. The
+            // committed array follows textual indices; later FLS-only entries use
+            // the MAX_VALUE sentinel and therefore remain at the end.
+            fileCache.children.sort((first, second) => first.index - second.index)
             stage = 'ast'
             await this.updateAST(fileCache)
             if (!this.isCurrent(request)) {
@@ -652,6 +656,10 @@ export class Cache implements vscode.Disposable {
                 const ownerCache = this.get(discovery.ownerPath)
                 if (ownerCache === undefined) {
                     logger.log(`Cache not finished on ${discovery.ownerPath} when parsing fls.`)
+                    continue
+                }
+                const childKey = CacheStore.normalizePath(discovery.filePath)
+                if (ownerCache.children.some(child => CacheStore.normalizePath(child.filePath) === childKey)) {
                     continue
                 }
                 ownerCache.children.push({index: Number.MAX_VALUE, filePath: discovery.filePath})

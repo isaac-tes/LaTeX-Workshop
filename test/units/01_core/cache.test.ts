@@ -511,8 +511,8 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             lw.watcher.src.add(vscode.Uri.file(watchedPath))
             const discoverStub = sinon.stub(dependencies, 'discoverDependencies').callsFake(async function* () {
                 await Promise.resolve()
-                yield {kind: 'input' as const, filePath: childPath, index: 7, rootPath: texPath}
-                yield {kind: 'input' as const, filePath: watchedPath, index: 8, rootPath: texPath}
+                yield {kind: 'input' as const, filePath: childPath, index: 8, rootPath: texPath}
+                yield {kind: 'input' as const, filePath: watchedPath, index: 7, rootPath: texPath}
                 yield {
                     kind: 'external' as const,
                     filePath: externalPath,
@@ -548,8 +548,8 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 await originalRefresh(texPath)
                 const fileCache = instance.get(texPath)
                 assert.deepStrictEqual(fileCache?.children, [
-                    {filePath: childPath, index: 7},
-                    {filePath: watchedPath, index: 8}
+                    {filePath: watchedPath, index: 7},
+                    {filePath: childPath, index: 8}
                 ])
                 assert.deepStrictEqual(fileCache?.external, {[externalPath]: 'xr-', [unprefixedPath]: ''})
                 assert.strictEqual(discoverStub.firstCall.args[0].filePath, texPath)
@@ -1340,13 +1340,17 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         it('should apply FLS discoveries and forward raw child queries', async () => {
             const owner = get.path(fixture, 'main.tex')
             const child = '/phase6/fls-child.tex'
+            const sourceChild = '/phase6/source-child.tex'
+            const equivalentSourceChild = '/phase6/nested/../source-child.tex'
             const input = '/phase6/generated.out'
             const bib = get.path(fixture, 'main.bib')
             set.config('latex.watch.files.ignore', [])
             await lw.cache.refreshCache(owner)
+            lw.cache.get(owner)!.children.push({filePath: sourceChild, index: 3})
             const discoverStub = sinon.stub(auxiliaries, 'discoverFls').callsFake(async function* () {
                 await Promise.resolve()
                 yield {kind: 'input' as const, filePath: child, flsPath: '/phase6/main.fls', isTeX: true, ownerPath: owner}
+                yield {kind: 'input' as const, filePath: equivalentSourceChild, flsPath: '/phase6/main.fls', isTeX: true, ownerPath: owner}
                 yield {kind: 'input' as const, filePath: input, flsPath: '/phase6/main.fls', isTeX: false, ownerPath: owner}
                 yield {kind: 'bibliography' as const, filePath: bib, auxPath: '/phase6/main.aux', ownerPath: owner}
                 yield {kind: 'bibliography' as const, filePath: bib, auxPath: '/phase6/main.aux', ownerPath: owner}
@@ -1362,7 +1366,10 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
                 sinon.assert.calledOnceWithExactly(discoverStub, owner)
                 sinon.assert.calledOnceWithExactly(childrenStub, '/candidate.tex')
-                assert.deepStrictEqual(lw.cache.get(owner)?.children.slice(-1), [{filePath: child, index: Number.MAX_VALUE}])
+                assert.deepStrictEqual(lw.cache.get(owner)?.children, [
+                    {filePath: sourceChild, index: 3},
+                    {filePath: child, index: Number.MAX_VALUE}
+                ])
                 sinon.assert.calledWith(addSpy, child)
                 sinon.assert.calledWith(addSpy, input)
                 assert.deepStrictEqual([...lw.cache.get(owner)!.bibfiles], [bib])

@@ -5,6 +5,7 @@ import { lw } from '../../lw'
 import type { FileCache } from '../../types'
 import { InputFileRegExp } from '../../utils/inputfilepath'
 import * as utils from '../../utils/utils'
+import { CacheStore } from './store'
 
 const logger = lw.log('Cacher')
 
@@ -37,22 +38,24 @@ export async function* discoverDependencies(source: DependencySource, rootPath: 
 
 async function* discoverInputDependencies(source: DependencySource, rootPath: string): AsyncGenerator<DependencyDiscovery> {
     const inputFileRegExp = new InputFileRegExp()
-    const childPaths = new Set(source.childPaths)
+    const childPaths = new Set(source.childPaths.map(childPath => CacheStore.normalizePath(childPath)))
+    const rootKey = CacheStore.normalizePath(rootPath)
     while (true) {
         const result = await inputFileRegExp.exec(source.contentTrimmed, source.filePath, rootPath)
         if (!result) {
             break
         }
 
-        if (!(await lw.file.exists(result.path)) || path.relative(result.path, rootPath) === '') {
+        const resultKey = CacheStore.normalizePath(result.path)
+        if (!(await lw.file.exists(result.path)) || resultKey === rootKey) {
             continue
         }
 
-        if (childPaths.has(result.path)) {
+        if (childPaths.has(resultKey)) {
             continue
         }
 
-        childPaths.add(result.path)
+        childPaths.add(resultKey)
         yield {
             kind: 'input',
             index: result.match.index,
@@ -64,6 +67,7 @@ async function* discoverInputDependencies(source: DependencySource, rootPath: st
 
 async function* discoverExternalDependencies(source: DependencySource, rootPath: string): AsyncGenerator<DependencyDiscovery> {
     const externalDocRegExp = /\\externaldocument(?:\[(.*?)\])?\{(.*?)\}/g
+    const rootKey = CacheStore.normalizePath(rootPath)
     while (true) {
         const result = externalDocRegExp.exec(source.contentTrimmed)
         if (!result) {
@@ -72,7 +76,7 @@ async function* discoverExternalDependencies(source: DependencySource, rootPath:
 
         const texDirs = vscode.workspace.getConfiguration('latex-workshop').get('latex.texDirs') as string[]
         const externalPath = await utils.resolveFile([path.dirname(source.filePath), path.dirname(rootPath), ...texDirs], result[2])
-        if (!externalPath || !(await lw.file.exists(externalPath)) || path.relative(externalPath, rootPath) === '') {
+        if (!externalPath || !(await lw.file.exists(externalPath)) || CacheStore.normalizePath(externalPath) === rootKey) {
             logger.log(
                 `Failed resolving external ${result[2]} . Tried ${externalPath} ` +
                     (externalPath && path.relative(externalPath, rootPath) === '' ? ', which is root.' : '.')
@@ -100,16 +104,26 @@ export function getIncludedTeX(filePath: string | undefined, getCache: CacheLook
     if (filePath === undefined) {
         return includedTeX
     }
-    const fileCache = getCache(filePath)
-    if (fileCache === undefined) {
-        return includedTeX
-    }
-    includedTeX.add(filePath)
-    for (const child of fileCache.children) {
-        if (includedTeX.has(child.filePath)) {
-            continue
+    const checked = new Set(Array.from(includedTeX, includedPath => CacheStore.normalizePath(includedPath)))
+
+    function visit(currentPath: string, traverseExisting = false): void {
+        const fileCache = getCache(currentPath)
+        if (fileCache === undefined) {
+            return
         }
-        getIncludedTeX(child.filePath, getCache, includedTeX)
+        const cacheKey = CacheStore.normalizePath(currentPath)
+        if (checked.has(cacheKey) && !traverseExisting) {
+            return
+        }
+        if (!checked.has(cacheKey)) {
+            checked.add(cacheKey)
+            includedTeX.add(currentPath)
+        }
+        for (const child of fileCache.children) {
+            visit(child.filePath)
+        }
     }
+
+    visit(filePath, true)
     return includedTeX
 }
