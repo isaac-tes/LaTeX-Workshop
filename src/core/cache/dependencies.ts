@@ -107,24 +107,22 @@ export function getIncludedTeX(filePath: string | undefined, getCache: CacheLook
     }
     const checked = new Set<string>()
 
-    function visit(currentPath: string, traverseExisting = false): void {
+    function visit(currentPath: string): void {
         const fileCache = getCache(currentPath)
         if (fileCache === undefined) {
             return
         }
         const cacheKey = CacheStore.normalizePath(currentPath)
-        if (checked.has(cacheKey) && !traverseExisting) {
+        if (checked.has(cacheKey)) {
             return
         }
-        if (!checked.has(cacheKey)) {
-            checked.add(cacheKey)
-            includedTeX.add(currentPath)
-        }
+        checked.add(cacheKey)
+        includedTeX.add(currentPath)
         for (const child of fileCache.children) {
             visit(child.filePath)
         }
     }
 
-    visit(filePath, true)
+    visit(filePath)
     return includedTeX
 }

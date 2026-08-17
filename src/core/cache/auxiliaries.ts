@@ -98,6 +98,8 @@ async function* discoverAuxFile(filePath: string, srcDir: string, ownerPath: str
  * Discovers FLS inputs in source order before parsing AUX outputs. Cache applies
  * each yielded event before requesting the next one, preserving partial
  * progress and the input-before-output workflow when a later operation fails.
+ * Every AUX result carries the original FLS owner rather than a mutable global
+ * root, so bibliography ownership stays stable throughout the workflow.
  */
 export async function* discoverFls(filePath: string): AsyncGenerator<AuxiliaryDiscovery> {
     const flsPath = await lw.file.getFlsPath(filePath)

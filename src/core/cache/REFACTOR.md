@@ -8,7 +8,7 @@ new repository facts conflict with the plan or require a behavioral decision.
 Behavior outside the decisions recorded here must not be changed without a new
 review.
 
-Current status: **Phase 7 complete; Phase 8 not started.**
+Current status: **Migration complete through Phase 9.**
 
 The migration must remain incremental and reversible. Structural moves, test
 moves, and behavior changes belong in separate commits whenever practical.
@@ -1097,9 +1097,9 @@ search confirming no raw in-flight Map access remains.
 
 **Rollback point:** The completed Phase 7 sequence.
 
-### [ ] Phase 9: Final audit
+### [x] Phase 9: Final audit
 
-**Status:** Not started.
+**Status:** Completed on 2026-08-17.
 
 **Goal:** Confirm the implementation matches this document and contains no
 accidental API or responsibility drift.
@@ -1109,20 +1109,37 @@ accidental API or responsibility drift.
 **Behavior policy:** No new behavior. Any newly discovered behavior decision
 requires updating and re-approving this plan first.
 
-**Implementation notes:** Audit imports, exports, module direction, instance
-state, listener ownership, disposed behavior, error boundaries, and path rules.
-Remove obsolete comments and ensure remaining comments explain design rather
-than syntax.
+**Implementation notes:** The audit confirmed that the public module exports
+only `Cache` and the production singleton, internal modules do not access the
+singleton, mutable state remains instance-owned, watcher subscriptions are
+instance-owned and disposable, and production consumers use the singleton.
+Disposed behavior, detached rejection containment, normalized identity, and
+fixed FLS-owner rules match the approved contracts. Obsolete public JSDoc was
+corrected, generation/revision and FLS-owner invariants were documented, and a
+now-unreachable included-TeX compatibility branch was removed without changing
+observable behavior.
 
-**Required comments:** Review the full minimum comment list and public JSDoc.
+**Required comments:** The full minimum comment list and public JSDoc were
+reviewed. Critical comments now describe ownership, ordering, completion,
+invalidation, error, and recursion contracts rather than implementation syntax.
 
-**Tests to move/add:** Full cache suite and full repository regression suite.
+**Tests to move/add:** No additional test movement was necessary. The cache
+suite passed with **117 passing**, and the full repository suite passed with
+**1126 passing**.
 
-**Coverage evidence:** Record the final per-file table with 100% statements,
-branches, functions, and lines for the public cache module and every internal file.
+**Coverage evidence:** Final scoped c8 results under Node `v20.20.2`:
 
-**Verification commands:** Node 20 setup, clean compile, relevant tests, full
-tests, scoped c8 command, lint, and a final public-API repository search.
+| File | Statements | Branches | Functions | Lines |
+| --- | ---: | ---: | ---: | ---: |
+| `src/core/cache.ts` | 100% | 100% | 100% | 100% |
+| `src/core/cache/auxiliaries.ts` | 100% | 100% | 100% | 100% |
+| `src/core/cache/bibliography.ts` | 100% | 100% | 100% | 100% |
+| `src/core/cache/dependencies.ts` | 100% | 100% | 100% | 100% |
+| `src/core/cache/store.ts` | 100% | 100% | 100% | 100% |
+
+**Verification commands:** Node 20 compile for both TypeScript projects, lint,
+the focused cache suite, scoped per-file c8 enforcement, the full repository
+suite, `git diff --check`, and final public-API/import searches all passed.
 
 **Suggested commit boundary:** Audit corrections only; no mixed refactoring.
 

@@ -102,17 +102,10 @@ export class Cache implements vscode.Disposable {
     }
 
     /**
-     * Adds a file to the watcher if it is not excluded and not already being
-     * watched.
-     *
-     * This function checks if a given file path should be excluded from the
-     * watcher. If the file is not excluded and is not already in the watcher, it
-     * logs the addition and adds the file path to the source watcher. This function
-     * will not automatically invoke `refreshCache` in the chain.
-     *
-     * @param {string} filePath - The path to the file to be added to the watcher.
+     * Registers a non-excluded source with the shared watcher without scheduling
+     * a refresh. Throws after this instance has been disposed.
      */
-    add(filePath: string) {
+    add(filePath: string): void {
         this.assertActive()
         if (this.isExcluded(filePath)) {
             logger.log(`Ignored ${filePath} .`)
@@ -125,18 +118,7 @@ export class Cache implements vscode.Disposable {
         }
     }
 
-    /**
-     * Retrieves the cache data for a specified file path.
-     *
-     * This function looks up the cache for a given file path and returns the
-     * corresponding `FileCache` object if it exists. If the file path is not found
-     * in the cache, it returns `undefined`.
-     *
-     * @param {string} filePath - The path to the file whose cache data is to be
-     * retrieved.
-     * @returns {FileCache | undefined} - The `FileCache` object associated with the
-     * file path, or `undefined` if not found.
-     */
+    /** Returns the committed entry for a path, or undefined after disposal. */
     get(filePath: string): FileCache | undefined {
         if (this.disposed) {
             return undefined
@@ -144,16 +126,7 @@ export class Cache implements vscode.Disposable {
         return this.store.get(filePath)
     }
 
-    /**
-     * Retrieves a list of all cached file paths.
-     *
-     * This function returns an array containing all the file paths currently stored
-     * in the cache. It does this by converting the keys of the `caches` map, which
-     * holds the cached file data, into an array.
-     *
-     * @returns {string[]} - An array of strings representing the file paths of all
-     * cached files.
-     */
+    /** Returns committed original paths in insertion order, or an empty list after disposal. */
     paths(): string[] {
         if (this.disposed) {
             return []
@@ -164,17 +137,17 @@ export class Cache implements vscode.Disposable {
     /**
      * Waits for the current refresh of a file to finish. If no refresh starts
      * within the timeout, one is forced. The returned promise resolves only after
-     * that final refresh queue settles and rejects when the refresh fails.
+     * that final refresh queue settles and rejects when the refresh fails or this
+     * instance has been disposed.
      */
     async wait(filePath: string, seconds: number = 2): Promise<void> {
         this.assertActive()
         let waited = 0
         while (this.store.getInFlight(filePath) === undefined && this.get(filePath) === undefined) {
-            // Just open vscode, has not cached, wait for a bit?
+            // Give startup caching a chance before forcing duplicate work.
             await new Promise(resolve => setTimeout(resolve, 100))
             waited++
             if (waited >= seconds * 10) {
-                // Waited for two seconds before starting cache. Really?
                 logger.log(`Error loading cache: ${filePath} . Forcing.`)
                 await this.refreshCache(filePath)
                 break
@@ -197,14 +170,11 @@ export class Cache implements vscode.Disposable {
     }
 
     /**
-     * Resets the state of various watchers and clears the file cache.
-     *
-     * This function resets the source and bibliography watchers to their initial
-     * states, ensuring that any ongoing file watching activities are terminated and
-     * prepared for a fresh start. It iterates through all cached files and removes
-     * them from the cache, effectively clearing all stored file data.
+     * Clears logical cache state, shared watcher entries, and pending timers while
+     * keeping this instance's watcher subscriptions active for reuse. In-flight I/O
+     * may finish, but generation invalidation prevents stale commits and events.
      */
-    reset() {
+    reset(): void {
         // Generation invalidation lets underlying I/O finish while preventing
         // work started before reset from mutating the new logical cache state.
         this.generation++
@@ -226,7 +196,8 @@ export class Cache implements vscode.Disposable {
     /**
      * Refreshes one cache entry and any same-file rerun queued while it is active.
      * The returned promise resolves after the final queued result is committed, or
-     * immediately for an ineligible file, and rejects if the final refresh fails.
+     * immediately for an ineligible file, and rejects if the final refresh fails or
+     * this instance has been disposed.
      */
     async refreshCache(filePath: string, rootPath?: string): Promise<void> {
         this.assertActive()
@@ -416,12 +387,14 @@ export class Cache implements vscode.Disposable {
         return this.refreshDrafts.get(CacheStore.normalizePath(filePath)) ?? this.get(filePath)
     }
 
+    /** Accepts work only while both its whole-cache generation and path revision remain current. */
     private isCurrent(request: RefreshRequest): boolean {
         const cacheKey = CacheStore.normalizePath(request.filePath)
         return !this.disposed && request.generation === this.generation &&
             request.revision === (this.pathRevisions.get(cacheKey) ?? 0)
     }
 
+    /** Invalidates one path without cancelling its underlying I/O. */
     private invalidatePath(filePath: string): void {
         const cacheKey = CacheStore.normalizePath(filePath)
         this.pathRevisions.set(cacheKey, (this.pathRevisions.get(cacheKey) ?? 0) + 1)
@@ -446,23 +419,11 @@ export class Cache implements vscode.Disposable {
     }
 
     /**
-     * Refreshes the cache for a file aggressively based on the user's configuration
-     * settings.
-     *
-     * This function checks if the specified file path has an existing cache entry.
-     * If it does, and if the aggressive update setting
-     * 'intellisense.update.aggressive.enabled' is enabled in the workspace
-     * configuration, it schedules a cache refresh operation. If there is an
-     * existing scheduled operation, it is cleared to prevent multiple refreshes
-     * from overlapping. The refresh operation is then scheduled to run after a
-     * delay specified in the configuration 'intellisense.update.delay'. During the
-     * refresh, it also attempts to load the FLS file associated with the root path
-     * or the file path.
-     *
-     * @param {string} filePath - The path to the file for which to refresh the
-     * cache aggressively.
+     * Debounces source and FLS refresh work independently per normalized path when
+     * aggressive updates are enabled. Throws after disposal; detached failures are
+     * logged by the scheduled callback.
      */
-    refreshCacheAggressive(filePath: string) {
+    refreshCacheAggressive(filePath: string): void {
         this.assertActive()
         if (this.get(filePath) === undefined) {
             return
@@ -581,8 +542,9 @@ export class Cache implements vscode.Disposable {
 
     /**
      * Applies FLS inputs before AUX bibliography events. Exclusion deliberately
-     * precedes the existence check to preserve the existing ignored-file
-     * short-circuit, while owner recovery is awaited before adding TeX children.
+     * precedes the existence check, owner recovery is awaited before adding TeX
+     * children, and every AUX bibliography result remains attached to the fixed
+     * FLS owner. Throws after disposal.
      */
     async loadFlsFile(filePath: string): Promise<void> {
         this.assertActive()
@@ -639,15 +601,7 @@ export class Cache implements vscode.Disposable {
         }
     }
 
-    /**
-     * Retrieves a list of included bibliography files for a given file, ensuring
-     * uniqueness.
-     *
-     * @param {string} [filePath] - The path to the file to check for included
-     * bibliography files.
-     * @returns {string[]} - An array of unique bibliography file paths included in
-     * the specified file and its children.
-     */
+    /** Returns unique BibTeX resources in depth-first graph order, or an empty list after disposal. */
     getIncludedBib(filePath?: string): string[] {
         if (this.disposed) {
             return []
@@ -655,15 +609,7 @@ export class Cache implements vscode.Disposable {
         return bibliography.getIncludedBib(filePath ?? lw.root.file.path, cachePath => this.get(cachePath))
     }
 
-    /**
-     * Retrieves a list of included glossary bib files for a given file, ensuring
-     * uniqueness.
-     *
-     * @param {string} [filePath] - The path to the file to check for included
-     * bibliography files.
-     * @returns {string[]} - An array of unique glossary bib file paths included in
-     * the specified file and its children.
-     */
+    /** Returns unique glossary resources in depth-first graph order, or an empty list after disposal. */
     getIncludedGlossaryBib(filePath?: string): string[] {
         if (this.disposed) {
             return []
@@ -671,18 +617,7 @@ export class Cache implements vscode.Disposable {
         return bibliography.getIncludedGlossaryBib(filePath ?? lw.root.file.path, cachePath => this.get(cachePath))
     }
 
-    /**
-     * Retrieves a list of included TeX files, starting from a given file path.
-     *
-     * This function recursively gathers all TeX files included in a specified file,
-     * starting from the provided file path or the root file path if none is
-     * specified. It uses a depth-first search approach to traverse the file
-     * dependencies and caches the results to avoid redundant processing.
-     *
-     * @param {string} [filePath] - The path to the starting file. Defaults to the
-     * root file path.
-     * @returns {Set<string>} The included TeX paths in depth-first order.
-     */
+    /** Returns TeX paths in depth-first graph order, or an empty Set after disposal. */
     getIncludedTeX(filePath?: string): Set<string> {
         if (this.disposed) {
             return new Set()
@@ -690,19 +625,7 @@ export class Cache implements vscode.Disposable {
         return dependencies.getIncludedTeX(filePath ?? lw.root.file.path, cachePath => this.get(cachePath))
     }
 
-    /**
-     * Retrieves the input file dependencies for a given TeX file from its FLS file.
-     *
-     * This function determines the path to the FLS file corresponding to a given
-     * TeX file. If the FLS file path is found, it reads the content of the FLS file
-     * and parses it to extract the list of input files. The function then returns
-     * this list of input files, which represent the dependencies of the TeX file.
-     *
-     * @param {string} texFile - The path to the TeX file whose input file
-     * dependencies are to be retrieved.
-     * @returns {Promise<string[]>} - An array of strings representing the input
-     * file dependencies of the TeX file.
-     */
+    /** Returns all parsed FLS inputs without cache filtering and rejects after disposal. */
     async getFlsChildren(texFile: string): Promise<string[]> {
         this.assertActive()
         return auxiliaries.getFlsChildren(texFile)
