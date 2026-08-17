@@ -310,7 +310,7 @@ export class Cache implements vscode.Disposable {
                 return
             }
             stage = 'completion'
-            await this.updateElements(fileCache)
+            this.updateElements(fileCache)
             stage = 'bibliography'
             await this.applyBibliographyDiscoveries(fileCache, path.dirname(dependencyRoot), request)
             if (!this.isCurrent(request)) {
