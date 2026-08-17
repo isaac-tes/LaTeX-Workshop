@@ -13,8 +13,15 @@ import {
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     const fixture = get.path('01_core', 'cache')
+    const projectDir = path.resolve('/project')
+    const absoluteAuxDir = path.resolve('/build')
+    const elsewhereDir = path.resolve('/elsewhere')
     const existingFile = {type: 1, ctime: 0, mtime: 0, size: 0}
     let sandbox: sinon.SinonSandbox
+
+    function projectPath(...segments: string[]): string {
+        return path.join(projectDir, ...segments)
+    }
 
     async function discover(owner: string): Promise<AuxiliaryDiscovery[]> {
         const discoveries: AuxiliaryDiscovery[] = []
@@ -85,8 +92,8 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
 
         it('should filter only output overlap and classify all extensions case-insensitively', async () => {
-            const owner = '/project/main.tex'
-            const flsPath = '/project/main.fls'
+            const owner = projectPath('main.tex')
+            const flsPath = projectPath('main.fls')
             sandbox.stub(lw.file, 'getFlsPath').withArgs(owner).resolves(flsPath)
             sandbox.stub(lw.file, 'read').withArgs(flsPath).resolves([
                 'INPUT overlap.tex',
@@ -97,18 +104,18 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             ].join('\n'))
 
             assert.deepStrictEqual(await discover(owner), [
-                {kind: 'input', filePath: '/project/CHILD.TeX', flsPath, isTeX: true, ownerPath: owner},
-                {kind: 'input', filePath: '/project/generated.AUX', flsPath, isTeX: false, ownerPath: owner},
-                {kind: 'input', filePath: '/project/image.pdf', flsPath, isTeX: false, ownerPath: owner}
+                {kind: 'input', filePath: projectPath('CHILD.TeX'), flsPath, isTeX: true, ownerPath: owner},
+                {kind: 'input', filePath: projectPath('generated.AUX'), flsPath, isTeX: false, ownerPath: owner},
+                {kind: 'input', filePath: projectPath('image.pdf'), flsPath, isTeX: false, ownerPath: owner}
             ])
         })
     })
 
     describe('discoverFls AUX outputs', () => {
         it('should map nested relative AUX directories and pass fixed owner root and source base', async () => {
-            const owner = '/project/main.tex'
-            const flsPath = '/project/main.fls'
-            const auxPath = '/project/build/chap/main.AuX'
+            const owner = projectPath('main.tex')
+            const flsPath = projectPath('main.fls')
+            const auxPath = projectPath('build', 'chap', 'main.AuX')
             sandbox.stub(lw.file, 'getFlsPath').resolves(flsPath)
             sandbox.stub(lw.file, 'getAuxDir').returns('build')
             sandbox.stub(lw.file, 'read').callsFake(filePath => Promise.resolve(filePath === flsPath
@@ -123,29 +130,29 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 auxPath,
                 ownerPath: owner
             }])
-            sinon.assert.calledOnceWithExactly(getBibPath, 'references', '/project', '/project/chap')
+            sinon.assert.calledOnceWithExactly(getBibPath, 'references', projectDir, projectPath('chap'))
         })
 
         it('should support an absolute AUX root and preserve output directories outside it', async () => {
-            const owner = '/project/main.tex'
-            const flsPath = '/project/main.fls'
+            const owner = projectPath('main.tex')
+            const flsPath = projectPath('main.fls')
             sandbox.stub(lw.file, 'getFlsPath').resolves(flsPath)
-            sandbox.stub(lw.file, 'getAuxDir').returns('/build')
+            sandbox.stub(lw.file, 'getAuxDir').returns(absoluteAuxDir)
             sandbox.stub(lw.file, 'read').callsFake(filePath => Promise.resolve(filePath === flsPath
-                ? ['OUTPUT /build/main.aux', 'OUTPUT /elsewhere/other.aux'].join('\n')
+                ? [`OUTPUT ${path.join(absoluteAuxDir, 'main.aux')}`, `OUTPUT ${path.join(elsewhereDir, 'other.aux')}`].join('\n')
                 : '\\bibdata{references}'))
             sandbox.stub(lw.file, 'exists').resolves(existingFile)
             const getBibPath = sandbox.stub(lw.file, 'getBibPath').resolves([])
 
             await discover(owner)
 
-            assert.deepStrictEqual(getBibPath.firstCall.args, ['references', '/project', '/project'])
-            assert.deepStrictEqual(getBibPath.secondCall.args, ['references', '/project', '/elsewhere'])
+            assert.deepStrictEqual(getBibPath.firstCall.args, ['references', projectDir, projectDir])
+            assert.deepStrictEqual(getBibPath.secondCall.args, ['references', projectDir, elsewhereDir])
         })
 
         it('should skip non-AUX and missing AUX outputs', async () => {
-            const owner = '/project/main.tex'
-            sandbox.stub(lw.file, 'getFlsPath').resolves('/project/main.fls')
+            const owner = projectPath('main.tex')
+            sandbox.stub(lw.file, 'getFlsPath').resolves(projectPath('main.fls'))
             sandbox.stub(lw.file, 'read').resolves('OUTPUT main.pdf\nOUTPUT missing.aux')
             sandbox.stub(lw.file, 'exists').resolves(false)
             const getBibPath = sandbox.stub(lw.file, 'getBibPath')
@@ -155,8 +162,9 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
 
         it('should preserve command and path order while logging empty bibdata', async () => {
-            const owner = '/project/main.tex'
-            const flsPath = '/project/main.fls'
+            const owner = projectPath('main.tex')
+            const flsPath = projectPath('main.fls')
+            const auxPath = projectPath('main.aux')
             sandbox.stub(lw.file, 'getFlsPath').resolves(flsPath)
             sandbox.stub(lw.file, 'read').callsFake(filePath => Promise.resolve(filePath === flsPath
                 ? 'OUTPUT main.aux'
@@ -165,15 +173,15 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             sandbox.stub(lw.file, 'getBibPath').callsFake(bib => Promise.resolve([`/bib/${bib}.bib`]))
 
             assert.deepStrictEqual(await discover(owner), [
-                {kind: 'bibliography', filePath: '/bib/first.bib', auxPath: '/project/main.aux', ownerPath: owner},
-                {kind: 'bibliography', filePath: '/bib/second.bib', auxPath: '/project/main.aux', ownerPath: owner}
+                {kind: 'bibliography', filePath: '/bib/first.bib', auxPath, ownerPath: owner},
+                {kind: 'bibliography', filePath: '/bib/second.bib', auxPath, ownerPath: owner}
             ])
-            assert.hasLog('Empty \\bibdata in .aux /project/main.aux , skip.')
+            assert.hasLog(`Empty \\bibdata in .aux ${auxPath} , skip.`)
         })
 
         it('should treat an unreadable AUX file as empty', async () => {
-            const owner = '/project/main.tex'
-            const flsPath = '/project/main.fls'
+            const owner = projectPath('main.tex')
+            const flsPath = projectPath('main.fls')
             sandbox.stub(lw.file, 'getFlsPath').resolves(flsPath)
             sandbox.stub(lw.file, 'read').callsFake(filePath => Promise.resolve(filePath === flsPath ? 'OUTPUT main.aux' : undefined))
             sandbox.stub(lw.file, 'exists').resolves(existingFile)
@@ -182,8 +190,9 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
 
         it('should keep earlier events visible when a later bibliography resolution fails', async () => {
-            const owner = '/project/main.tex'
-            const flsPath = '/project/main.fls'
+            const owner = projectPath('main.tex')
+            const flsPath = projectPath('main.fls')
+            const auxPath = projectPath('main.aux')
             sandbox.stub(lw.file, 'getFlsPath').resolves(flsPath)
             sandbox.stub(lw.file, 'read').callsFake(filePath => Promise.resolve(filePath === flsPath
                 ? 'OUTPUT main.aux'
@@ -196,7 +205,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             assert.deepStrictEqual(await generator.next(), {
                 done: false,
-                value: {kind: 'bibliography', filePath: '/bib/first.bib', auxPath: '/project/main.aux', ownerPath: owner}
+                value: {kind: 'bibliography', filePath: '/bib/first.bib', auxPath, ownerPath: owner}
             })
             await assert.rejects(generator.next(), /resolution failed/)
             assert.notHasLog(`Parsed .fls ${flsPath} .`)
@@ -209,19 +218,19 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
 
         it('should return every parsed input without workflow filtering', async () => {
-            const owner = '/project/main.tex'
-            sandbox.stub(lw.file, 'getFlsPath').resolves('/project/main.fls')
+            const owner = projectPath('main.tex')
+            sandbox.stub(lw.file, 'getFlsPath').resolves(projectPath('main.fls'))
             sandbox.stub(lw.file, 'read').resolves('INPUT main.tex\nINPUT missing.aux\nINPUT ignored.out\nOUTPUT missing.aux')
 
             assert.deepStrictEqual(await getFlsChildren(owner), [
-                '/project/main.tex', '/project/missing.aux', '/project/ignored.out'
+                projectPath('main.tex'), projectPath('missing.aux'), projectPath('ignored.out')
             ])
         })
 
         it('should treat an unreadable FLS file as empty', async () => {
-            sandbox.stub(lw.file, 'getFlsPath').resolves('/project/main.fls')
+            sandbox.stub(lw.file, 'getFlsPath').resolves(projectPath('main.fls'))
             sandbox.stub(lw.file, 'read').resolves(undefined)
-            assert.deepStrictEqual(await getFlsChildren('/project/main.tex'), [])
+            assert.deepStrictEqual(await getFlsChildren(projectPath('main.tex')), [])
         })
     })
 })
