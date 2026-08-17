@@ -1,5 +1,10 @@
 # Change Log
 
+## [10.18.1] - 2026-08-17
+
+### Fixed
+- (#4963) Improve internal caching logic.
+
 ## [10.18.0] - 2026-08-13
 
 ### Added
