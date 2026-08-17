@@ -20,6 +20,14 @@ type RefreshRequest = {
     rootPath?: string
 }
 
+type RefreshStage = 'read' | 'dependencies' | 'ast' | 'completion' | 'bibliography' | 'commit'
+
+type ExternalUpdate = {
+    ownerPath: string,
+    filePath: string,
+    prefix: string
+}
+
 /**
  * Coordinates one independent cache state and its source-watcher subscriptions.
  * Every constructed instance must be disposed when its lifetime ends so its
@@ -28,9 +36,12 @@ type RefreshRequest = {
 export class Cache implements vscode.Disposable {
     private readonly store = new CacheStore()
     private readonly pendingRefreshes = new Map<string, RefreshRequest>()
+    private readonly refreshDrafts = new Map<string, FileCache>()
     private readonly watcherSubscription: vscode.Disposable
     /** Coordinates the single outline reconstruction after current refreshes finish. */
     private cachingFilesCount = 0
+    /** Records successful work until the last concurrent refresh queue settles. */
+    private outlineDirty = false
     /** Preserves the current one-timer aggressive refresh debounce behavior. */
     private updateCompleter!: NodeJS.Timeout
 
@@ -58,7 +69,7 @@ export class Cache implements vscode.Disposable {
     private handleWatchedFileChange(uri: vscode.Uri): void {
         const filePath = uri.fsPath
         if (this.canCache(filePath)) {
-            void this.refreshCache(filePath)
+            this.runDetached(this.refreshCache(filePath), `watched refresh for ${filePath}`)
         }
     }
 
@@ -275,57 +286,85 @@ export class Cache implements vscode.Disposable {
      * circular dependency graphs cannot create queue wait cycles.
      */
     private async runRefreshQueue(cacheKey: string, initialRequest: RefreshRequest): Promise<void> {
+        this.cachingFilesCount++
         let request: RefreshRequest | undefined = initialRequest
-        while (request !== undefined) {
-            try {
-                await this.refreshFile(request.filePath, request.rootPath)
-            } catch (error) {
-                if (!this.pendingRefreshes.has(cacheKey)) {
-                    throw error
+        try {
+            while (request !== undefined) {
+                try {
+                    await this.refreshFile(request.filePath, request.rootPath)
+                } catch (error) {
+                    if (!this.pendingRefreshes.has(cacheKey)) {
+                        throw error
+                    }
                 }
-                logger.log(`Caching ${request.filePath} failed before queued refresh: ${String(error)}`)
+                request = this.pendingRefreshes.get(cacheKey)
+                this.pendingRefreshes.delete(cacheKey)
             }
-            request = this.pendingRefreshes.get(cacheKey)
-            this.pendingRefreshes.delete(cacheKey)
+        } finally {
+            this.cachingFilesCount--
+            if (this.cachingFilesCount === 0 && this.outlineDirty) {
+                this.outlineDirty = false
+                this.runDetached(lw.outline.reconstruct(), 'outline reconstruction')
+            }
         }
     }
 
-    /** Runs one refresh using the pre-Phase 7 atomicity and side-effect order. */
+    /**
+     * Builds a private draft through fixed stages, then replaces the committed
+     * cache exactly once. A failed stage leaves the previous successful cache in
+     * place and cannot emit FileParsed. External-document changes are deferred to
+     * the same commit boundary, while watcher and child scheduling remain
+     * discovery side effects.
+     */
     private async refreshFile(filePath: string, rootPath?: string): Promise<void> {
         logger.log(`Caching ${filePath} .`)
-        this.cachingFilesCount++
-        const openEditor: vscode.TextDocument | undefined = vscode.workspace.textDocuments.find(document => document.fileName === path.normalize(filePath))
-        const content = openEditor?.isDirty ? openEditor.getText() : (await lw.file.read(filePath)) ?? ''
-        const fileCache: FileCache = {
-            filePath,
-            content,
-            contentTrimmed: utils.stripCommentsAndVerbatim(content),
-            elements: {},
-            children: [],
-            bibfiles: new Set(),
-            glossarybibfiles: new Set(),
-            external: {}
-        }
-        // Preserve the current non-atomic lifecycle: callers can observe this
-        // partial entry while child, AST, and completion parsing are still running.
-        this.store.set(filePath, fileCache)
-        const dependencyRoot = rootPath || lw.root.file.path || fileCache.filePath
-        await this.applyDependencyDiscoveries(fileCache, dependencyRoot)
+        let stage: RefreshStage = 'read'
+        const cacheKey = CacheStore.normalizePath(filePath)
+        try {
+            const openEditor: vscode.TextDocument | undefined = vscode.workspace.textDocuments.find(document => document.fileName === path.normalize(filePath))
+            const content = openEditor?.isDirty ? openEditor.getText() : (await lw.file.read(filePath)) ?? ''
+            const fileCache: FileCache = {
+                filePath,
+                content,
+                contentTrimmed: utils.stripCommentsAndVerbatim(content),
+                elements: {},
+                children: [],
+                bibfiles: new Set(),
+                glossarybibfiles: new Set(),
+                external: {}
+            }
+            this.refreshDrafts.set(cacheKey, fileCache)
+            const dependencyRoot = rootPath || lw.root.file.path || fileCache.filePath
 
-        // Same-file refreshes currently run concurrently and replace this shared
-        // map entry. Any task's finally handler may therefore clear a newer task;
-        // Phase 7 changes that behavior after the characterization baseline.
-        await this.updateAST(fileCache)
-            .then(() => this.updateElements(fileCache, dependencyRoot))
-            .finally(() => {
-                lw.lint.label.check()
-                this.cachingFilesCount--
-                lw.event.fire(lw.event.FileParsed, filePath)
-
-                if (this.cachingFilesCount === 0) {
-                    void lw.outline.reconstruct()
+            stage = 'dependencies'
+            const externalUpdates = await this.applyDependencyDiscoveries(fileCache, dependencyRoot)
+            stage = 'ast'
+            await this.updateAST(fileCache)
+            stage = 'completion'
+            await this.updateElements(fileCache)
+            stage = 'bibliography'
+            await this.applyBibliographyDiscoveries(fileCache, path.dirname(dependencyRoot))
+            stage = 'commit'
+            this.store.set(filePath, fileCache)
+            for (const update of externalUpdates) {
+                const ownerCache = this.getRefreshCache(update.ownerPath)
+                if (ownerCache !== undefined) {
+                    ownerCache.external[update.filePath] = update.prefix
+                    logger.log(
+                        `External document ${update.filePath} from ${filePath} .` +
+                        (update.prefix ? ` Prefix is ${update.prefix}` : '')
+                    )
                 }
-            })
+            }
+            this.outlineDirty = true
+            lw.event.fire(lw.event.FileParsed, filePath)
+        } catch (error) {
+            logger.log(`Failed caching ${filePath} at ${stage} stage: ${String(error)}`)
+            throw error
+        } finally {
+            this.refreshDrafts.delete(cacheKey)
+            lw.lint.label.check()
+        }
     }
 
     /**
@@ -334,7 +373,8 @@ export class Cache implements vscode.Disposable {
      * Recursive refreshes are not awaited because circular TeX graphs would
      * otherwise make parent and child refreshes wait on each other.
      */
-    private async applyDependencyDiscoveries(fileCache: FileCache, rootPath: string): Promise<void> {
+    private async applyDependencyDiscoveries(fileCache: FileCache, rootPath: string): Promise<ExternalUpdate[]> {
+        const externalUpdates: ExternalUpdate[] = []
         const source = {
             filePath: fileCache.filePath,
             contentTrimmed: fileCache.contentTrimmed,
@@ -345,16 +385,9 @@ export class Cache implements vscode.Disposable {
                 fileCache.children.push({index: discovery.index, filePath: discovery.filePath})
                 logger.log(`Input ${discovery.filePath} from ${fileCache.filePath} .`)
             } else {
-                // XR metadata belongs to the root even when declared in a child.
-                // A missing owner suppresses only this mutation, not scheduling.
-                const ownerCache = this.get(discovery.ownerPath)
-                if (ownerCache !== undefined) {
-                    ownerCache.external[discovery.filePath] = discovery.prefix
-                    logger.log(
-                        `External document ${discovery.filePath} from ${fileCache.filePath} .` +
-                        (discovery.prefix ? ` Prefix is ${discovery.prefix}` : '')
-                    )
-                }
+                // XR metadata belongs to the root even when declared in a child,
+                // so mutation waits for this file's commit boundary.
+                externalUpdates.push(discovery)
             }
 
             const uri = lw.file.toUri(discovery.filePath)
@@ -362,8 +395,22 @@ export class Cache implements vscode.Disposable {
                 continue
             }
             this.add(discovery.filePath)
-            void this.refreshCache(discovery.filePath, discovery.rootPath)
+            this.runDetached(
+                this.refreshCache(discovery.filePath, discovery.rootPath),
+                `dependency refresh for ${discovery.filePath}`
+            )
         }
+        return externalUpdates
+    }
+
+    /** Finds an active draft before falling back to committed cache state. */
+    private getRefreshCache(filePath: string): FileCache | undefined {
+        return this.refreshDrafts.get(CacheStore.normalizePath(filePath)) ?? this.get(filePath)
+    }
+
+    /** Prevents detached application work from becoming an unhandled rejection. */
+    private runDetached(operation: Promise<unknown> | undefined, description: string): void {
+        void Promise.resolve(operation).catch(error => logger.log(`Failed ${description}: ${String(error)}`))
     }
 
     /**
@@ -436,7 +483,7 @@ export class Cache implements vscode.Disposable {
      * @param {FileCache} fileCache - The cache object containing the file data and
      * metadata to be updated.
      */
-    private async updateElements(fileCache: FileCache, rootPath: string): Promise<void> {
+    private updateElements(fileCache: FileCache): void {
         const start = performance.now()
         lw.completion.citation.parse(fileCache)
         // Package parsing must be before command and environment.
@@ -447,7 +494,6 @@ export class Cache implements vscode.Disposable {
         lw.completion.macro.parse(fileCache)
         lw.completion.subsuperscript.parse(fileCache)
         lw.completion.input.parseGraphicsPath(fileCache)
-        await this.applyBibliographyDiscoveries(fileCache, path.dirname(rootPath))
         const elapsed = performance.now() - start
         logger.log(`Updated elements in ${elapsed.toFixed(2)} ms: ${fileCache.filePath} .`)
     }
@@ -513,7 +559,10 @@ export class Cache implements vscode.Disposable {
                 this.add(discovery.filePath)
                 logger.log(`Found ${discovery.filePath} from .fls ${discovery.flsPath} , caching.`)
                 // Child refresh remains fire-and-forget to avoid circular waits.
-                void this.refreshCache(discovery.filePath, discovery.ownerPath)
+                this.runDetached(
+                    this.refreshCache(discovery.filePath, discovery.ownerPath),
+                    `FLS child refresh for ${discovery.filePath}`
+                )
                 continue
             }
 

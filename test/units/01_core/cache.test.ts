@@ -514,7 +514,12 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 }
             })
             const originalRefresh = instance.refreshCache.bind(instance)
-            const refreshStub = sinon.stub(instance, 'refreshCache').resolves()
+            const refreshStub = sinon.stub(instance, 'refreshCache').callsFake(refreshPath => {
+                if (refreshPath === childPath) {
+                    return Promise.reject<Promise<void> | undefined>(new Error('detached child failure'))
+                }
+                return Promise.resolve(undefined)
+            })
             const addStub = sinon.stub(instance, 'add')
 
             try {
@@ -536,6 +541,8 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                     [unprefixedPath, unprefixedPath],
                     [missingOwnerPath, missingOwnerPath]
                 ])
+                await waitFor(() => log.all().some(message => message.includes('detached child failure')))
+                assert.hasLog(`Failed dependency refresh for ${childPath}: Error: detached child failure`)
             } finally {
                 discoverStub.restore()
                 instance.dispose()
@@ -607,30 +614,94 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.strictEqual(lw.cache.get(lw.cache.paths()[0])?.content, '')
         })
 
-        it('should keep a partial cache and emit completion side effects when AST parsing fails', async () => {
+        it('should preserve the last committed cache and suppress success side effects when parsing fails', async () => {
             const texPath = get.path(fixture, 'main.tex')
             const parseStub = lw.parser.parse.tex as sinon.SinonStub
             const eventStub = lw.event.fire as sinon.SinonStub
             const outlineStub = lw.outline.reconstruct as sinon.SinonStub
+            await lw.cache.refreshCache(texPath)
             parseStub.reset()
             eventStub.resetHistory()
             outlineStub.resetHistory()
             parseStub.rejects(new Error('characterized parse failure'))
+            const documentStub = mock.textDocument(texPath, '\\section{failed}', {isDirty: true})
 
             try {
                 await assert.rejects(lw.cache.refreshCache(texPath), /characterized parse failure/)
 
                 const cached = lw.cache.get(texPath)
                 assert.strictEqual(cached?.content, '%')
-                assert.strictEqual(cached?.ast, undefined)
-                assert.deepStrictEqual(cached?.elements, {})
                 assert.strictEqual(lw.cache.promises.get(texPath), undefined)
-                sinon.assert.calledWith(eventStub, lw.event.FileParsed, texPath)
-                sinon.assert.calledOnce(outlineStub)
+                sinon.assert.notCalled(eventStub)
+                sinon.assert.notCalled(outlineStub)
+                assert.hasLog(`Failed caching ${texPath} at ast stage: Error: characterized parse failure`)
             } finally {
+                documentStub.restore()
                 parseStub.reset()
             }
         })
+
+        const failingStages = [
+            {
+                stage: 'read',
+                fail: (_instance: CacheInstance) => sinon.stub(lw.file, 'read').rejects(new Error('stage failure'))
+            },
+            {
+                stage: 'dependencies',
+                fail: (instance: CacheInstance) => sinon.stub(
+                    instance as unknown as {applyDependencyDiscoveries: () => Promise<unknown>},
+                    'applyDependencyDiscoveries'
+                ).rejects(new Error('stage failure'))
+            },
+            {
+                stage: 'ast',
+                fail: (instance: CacheInstance) => sinon.stub(
+                    instance as unknown as {updateAST: () => Promise<void>},
+                    'updateAST'
+                ).rejects(new Error('stage failure'))
+            },
+            {
+                stage: 'completion',
+                fail: (instance: CacheInstance) => sinon.stub(
+                    instance as unknown as {updateElements: () => Promise<void>},
+                    'updateElements'
+                ).rejects(new Error('stage failure'))
+            },
+            {
+                stage: 'bibliography',
+                fail: (instance: CacheInstance) => sinon.stub(
+                    instance as unknown as {applyBibliographyDiscoveries: () => Promise<void>},
+                    'applyBibliographyDiscoveries'
+                ).rejects(new Error('stage failure'))
+            },
+            {
+                stage: 'commit',
+                fail: (instance: CacheInstance) => sinon.stub(
+                    (instance as unknown as {store: {set: () => void}}).store,
+                    'set'
+                ).throws(new Error('stage failure'))
+            }
+        ]
+
+        for (const {stage, fail} of failingStages) {
+            it(`should identify the ${stage} stage and leave no cache when it fails`, async () => {
+                const texPath = get.path(fixture, 'main.tex')
+                const instance = new Cache()
+                const eventStub = lw.event.fire as sinon.SinonStub
+                eventStub.resetHistory()
+                const failureStub = fail(instance)
+
+                try {
+                    await assert.rejects(instance.refreshCache(texPath), /stage failure/)
+                    assert.strictEqual(instance.get(texPath), undefined)
+                    sinon.assert.neverCalledWith(eventStub, lw.event.FileParsed, texPath)
+                    assert.hasLog(`Failed caching ${texPath} at ${stage} stage: Error: stage failure`)
+                } finally {
+                    failureStub.restore()
+                    instance.dispose()
+                }
+            })
+        }
 
         it('should coalesce same-file refreshes into one pending rerun shared by every caller', async () => {
             const texPath = get.path(fixture, 'main.tex')
@@ -666,10 +737,11 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 documentStub.restore()
 
                 assert.strictEqual(firstSettled, false)
-                assert.strictEqual(lw.cache.get(texPath)?.content, '\\section{second}')
+                assert.strictEqual(lw.cache.get(texPath)?.content, '\\section{first}')
 
                 secondParse.resolve(undefined)
                 await Promise.all([firstRefresh, secondRefresh])
+                assert.strictEqual(lw.cache.get(texPath)?.content, '\\section{second}')
                 assert.strictEqual(lw.cache.promises.get(texPath), undefined)
             } finally {
                 firstParse.resolve(undefined)
@@ -700,7 +772,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 await Promise.all([firstRefresh, secondRefresh])
 
                 sinon.assert.calledTwice(parseStub)
-                assert.hasLog(`Caching ${texPath} failed before queued refresh: Error: superseded refresh failure`)
+                assert.hasLog(`Failed caching ${texPath} at ast stage: Error: superseded refresh failure`)
             } finally {
                 firstParse.resolve(undefined)
                 if (firstRefresh && secondRefresh) {
@@ -738,7 +810,56 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             }
         })
 
-        it('should keep refresh completion side effects after reset removes an in-progress cache', async () => {
+        it('should reconstruct the outline once after concurrent success and failure settle', async () => {
+            const firstPath = get.path(fixture, 'main.tex')
+            const secondPath = get.path(fixture, 'another.tex')
+            const parseStub = lw.parser.parse.tex as sinon.SinonStub
+            const eventStub = lw.event.fire as sinon.SinonStub
+            const outlineStub = lw.outline.reconstruct as sinon.SinonStub
+            const firstParse = deferred<any>()
+            const secondParse = deferred<any>()
+            parseStub.reset()
+            eventStub.resetHistory()
+            outlineStub.resetHistory()
+            parseStub.onFirstCall().returns(firstParse.promise)
+            parseStub.onSecondCall().returns(secondParse.promise)
+
+            const firstRefresh = lw.cache.refreshCache(firstPath)
+            const secondRefresh = lw.cache.refreshCache(secondPath)
+            try {
+                await waitFor(() => parseStub.callCount === 2)
+                firstParse.resolve(undefined)
+                await firstRefresh
+                sinon.assert.notCalled(outlineStub)
+
+                secondParse.reject(new Error('parallel failure'))
+                await assert.rejects(secondRefresh, /parallel failure/)
+
+                sinon.assert.calledOnceWithExactly(eventStub, lw.event.FileParsed, firstPath)
+                sinon.assert.calledOnce(outlineStub)
+            } finally {
+                firstParse.resolve(undefined)
+                secondParse.resolve(undefined)
+                await Promise.allSettled([firstRefresh, secondRefresh])
+                parseStub.reset()
+            }
+        })
+
+        it('should contain an outline reconstruction rejection', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const outlineStub = lw.outline.reconstruct as sinon.SinonStub
+            outlineStub.rejects(new Error('outline failure'))
+
+            try {
+                await lw.cache.refreshCache(texPath)
+                await waitFor(() => log.all().some(message => message.includes('outline failure')))
+                assert.hasLog('Failed outline reconstruction: Error: outline failure')
+            } finally {
+                outlineStub.reset()
+            }
+        })
+
+        it('should still allow in-progress work to commit after reset before generation invalidation', async () => {
             const texPath = get.path(fixture, 'main.tex')
             const parseStub = lw.parser.parse.tex as sinon.SinonStub
             const eventStub = lw.event.fire as sinon.SinonStub
@@ -751,7 +872,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             try {
                 refresh = lw.cache.refreshCache(texPath)
                 await waitFor(() => parseStub.calledOnce)
-                assert.ok(lw.cache.get(texPath))
+                assert.strictEqual(lw.cache.get(texPath), undefined)
                 assert.ok(lw.cache.promises.has(texPath))
 
                 lw.cache.reset()
@@ -762,7 +883,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 pendingParse.resolve(undefined)
                 await refresh
 
-                assert.strictEqual(lw.cache.get(texPath), undefined)
+                assert.ok(lw.cache.get(texPath))
                 sinon.assert.calledWith(eventStub, lw.event.FileParsed, texPath)
             } finally {
                 pendingParse.resolve(undefined)
@@ -773,7 +894,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             }
         })
 
-        it('should keep refresh completion side effects after deletion removes an in-progress cache', async () => {
+        it('should still allow in-progress work to commit after deletion before path invalidation', async () => {
             const texPath = get.path(fixture, 'main.tex')
             const uri = vscode.Uri.file(texPath)
             const parseStub = lw.parser.parse.tex as sinon.SinonStub
@@ -800,7 +921,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 pendingParse.resolve(undefined)
                 await refresh
 
-                assert.strictEqual(lw.cache.get(texPath), undefined)
+                assert.ok(lw.cache.get(texPath))
                 sinon.assert.calledWith(eventStub, lw.event.FileParsed, texPath)
             } finally {
                 existsStub?.restore()

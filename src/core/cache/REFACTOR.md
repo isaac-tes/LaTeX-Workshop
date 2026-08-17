@@ -1004,8 +1004,15 @@ identity, per-path refresh coalescing, and atomic refresh/failure handling.
   every caller's result. The focused cache suite passed with **90 passing**, and
   scoped per-file coverage remained **100%** for all four metrics under Node
   `v20.20.2`.
-- [ ] Commit refresh drafts atomically and handle failures at asynchronous
-  boundaries.
+- [x] Commit refresh drafts atomically and handle failures at asynchronous
+  boundaries. Completed on 2026-08-17. Refreshes now advance through the fixed
+  read, dependencies, AST, completion, bibliography, and commit stages; failed
+  drafts preserve prior committed state and suppress FileParsed. Detached work
+  shares one rejection boundary, and outline reconstruction occurs once after
+  all concurrent queues settle when any refresh committed. The cache suite
+  passed with **98 passing**, the full suite passed with **1107 passing**, and
+  scoped per-file coverage remained **100%** for all four metrics under Node
+  `v20.20.2`.
 
 #### Phase 7.2: Lifecycle and scheduling
 
