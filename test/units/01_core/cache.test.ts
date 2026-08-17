@@ -1225,6 +1225,104 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             stub.restore()
             assert.strictEqual(lw.cache.get(lw.cache.paths()[0])?.content, '%%')
         })
+
+        it('should debounce different files independently', async () => {
+            const firstPath = get.path(fixture, 'main.tex')
+            const secondPath = get.path(fixture, 'another.tex')
+            await lw.cache.refreshCache(firstPath)
+            await lw.cache.refreshCache(secondPath)
+            const refreshStub = sinon.stub(lw.cache, 'refreshCache').resolves()
+            const flsStub = sinon.stub(lw.cache, 'loadFlsFile').resolves()
+
+            try {
+                lw.cache.refreshCacheAggressive(firstPath)
+                lw.cache.refreshCacheAggressive(secondPath)
+                await sleep(150)
+
+                sinon.assert.calledWithExactly(refreshStub, firstPath, lw.root.file.path)
+                sinon.assert.calledWithExactly(refreshStub, secondPath, lw.root.file.path)
+                sinon.assert.calledTwice(refreshStub)
+                sinon.assert.calledTwice(flsStub)
+            } finally {
+                refreshStub.restore()
+                flsStub.restore()
+            }
+        })
+
+        it('should share one debounce timer across equivalent normalized paths', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const equivalentPath = path.join(path.dirname(texPath), 'nested', '..', path.basename(texPath))
+            await lw.cache.refreshCache(texPath)
+            const refreshStub = sinon.stub(lw.cache, 'refreshCache').resolves()
+            const flsStub = sinon.stub(lw.cache, 'loadFlsFile').resolves()
+
+            try {
+                lw.cache.refreshCacheAggressive(texPath)
+                lw.cache.refreshCacheAggressive(equivalentPath)
+                await sleep(150)
+
+                sinon.assert.calledOnceWithExactly(refreshStub, equivalentPath, lw.root.file.path)
+                sinon.assert.calledOnce(flsStub)
+            } finally {
+                refreshStub.restore()
+                flsStub.restore()
+            }
+        })
+
+        it('should cancel every pending aggressive refresh on reset', async () => {
+            const firstPath = get.path(fixture, 'main.tex')
+            const secondPath = get.path(fixture, 'another.tex')
+            await lw.cache.refreshCache(firstPath)
+            await lw.cache.refreshCache(secondPath)
+            const refreshStub = sinon.stub(lw.cache, 'refreshCache').resolves()
+
+            try {
+                lw.cache.refreshCacheAggressive(firstPath)
+                lw.cache.refreshCacheAggressive(secondPath)
+                lw.cache.reset()
+                await sleep(150)
+
+                sinon.assert.notCalled(refreshStub)
+            } finally {
+                refreshStub.restore()
+            }
+        })
+
+        it('should cancel a pending aggressive refresh when its source is deleted', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const uri = vscode.Uri.file(texPath)
+            set.config('latex.watch.delay', 0)
+            lw.cache.add(texPath)
+            await lw.cache.refreshCache(texPath)
+            const refreshStub = sinon.stub(lw.cache, 'refreshCache').resolves()
+            const existsStub = sinon.stub(lw.file, 'exists').resolves(false)
+
+            try {
+                lw.cache.refreshCacheAggressive(texPath)
+                await sourceWatcherTestHooks.onDidDelete(uri)
+                await sleep(150)
+
+                sinon.assert.notCalled(refreshStub)
+            } finally {
+                existsStub.restore()
+                refreshStub.restore()
+            }
+        })
+
+        it('should contain aggressive refresh rejections', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            await lw.cache.refreshCache(texPath)
+            const refreshStub = sinon.stub(lw.cache, 'refreshCache').rejects(new Error('aggressive failure'))
+
+            try {
+                lw.cache.refreshCacheAggressive(texPath)
+                await waitFor(() => log.all().some(message => message.includes('aggressive failure')))
+
+                assert.hasLog(`Failed aggressive refresh for ${texPath}: Error: aggressive failure`)
+            } finally {
+                refreshStub.restore()
+            }
+        })
     })
 
     describe('lw.cache.updateAST', () => {

@@ -46,8 +46,7 @@ export class Cache implements vscode.Disposable {
     private cachingFilesCount = 0
     /** Records successful work until the last concurrent refresh queue settles. */
     private outlineDirty = false
-    /** Preserves the current one-timer aggressive refresh debounce behavior. */
-    private updateCompleter: NodeJS.Timeout | undefined
+    private readonly aggressiveRefreshTimers = new Map<string, NodeJS.Timeout>()
     private disposed = false
 
     constructor() {
@@ -246,10 +245,10 @@ export class Cache implements vscode.Disposable {
         this.pendingRefreshes.clear()
         this.refreshDrafts.clear()
         this.outlineDirty = false
-        if (this.updateCompleter !== undefined) {
-            clearTimeout(this.updateCompleter)
-            this.updateCompleter = undefined
+        for (const timer of this.aggressiveRefreshTimers.values()) {
+            clearTimeout(timer)
         }
+        this.aggressiveRefreshTimers.clear()
         lw.watcher.src.reset()
         lw.watcher.bib.reset()
         lw.watcher.glossary.reset()
@@ -473,6 +472,11 @@ export class Cache implements vscode.Disposable {
         this.pathRevisions.set(cacheKey, (this.pathRevisions.get(cacheKey) ?? 0) + 1)
         this.pendingRefreshes.delete(cacheKey)
         this.refreshDrafts.delete(cacheKey)
+        const timer = this.aggressiveRefreshTimers.get(cacheKey)
+        if (timer !== undefined) {
+            clearTimeout(timer)
+            this.aggressiveRefreshTimers.delete(cacheKey)
+        }
     }
 
     private assertActive(): void {
@@ -510,17 +514,30 @@ export class Cache implements vscode.Disposable {
         }
         const configuration = vscode.workspace.getConfiguration('latex-workshop')
         if (configuration.get('intellisense.update.aggressive.enabled')) {
-            if (this.updateCompleter) {
-                clearTimeout(this.updateCompleter)
+            const cacheKey = CacheStore.normalizePath(filePath)
+            const currentTimer = this.aggressiveRefreshTimers.get(cacheKey)
+            if (currentTimer !== undefined) {
+                clearTimeout(currentTimer)
             }
-            this.updateCompleter = setTimeout(async () => {
-                await this.refreshCache(filePath, lw.root.file.path)
-                // After refreshing the cache, children from .fls file only is
-                // discarded. We need to re-parse the .fls file to build the
-                // complete children dependency.
-                await this.loadFlsFile(lw.root.file.path || filePath)
+            // Each normalized path owns one timer, so activity in another file
+            // cannot cancel its delayed refresh. Repeated requests replace only
+            // this entry, and lifecycle invalidation clears the whole map.
+            const timer = setTimeout(() => {
+                this.aggressiveRefreshTimers.delete(cacheKey)
+                this.runDetached(
+                    this.runAggressiveRefresh(filePath),
+                    `aggressive refresh for ${filePath}`
+                )
             }, configuration.get('intellisense.update.delay', 1000))
+            this.aggressiveRefreshTimers.set(cacheKey, timer)
         }
+    }
+
+    private async runAggressiveRefresh(filePath: string): Promise<void> {
+        await this.refreshCache(filePath, lw.root.file.path)
+        // A source refresh discards children known only through the FLS file, so
+        // restore those dependencies after the coalesced source queue settles.
+        await this.loadFlsFile(lw.root.file.path || filePath)
     }
 
     /**

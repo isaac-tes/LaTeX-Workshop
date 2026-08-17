@@ -1027,7 +1027,13 @@ per-file aggressive-refresh debounce.
   idempotent reset/dispose path. The cache suite passed with **106 passing**, and
   scoped per-file coverage reported **100%** for all four metrics under Node
   `v20.20.2`.
-- [ ] Debounce aggressive refreshes independently per normalized file path.
+- [x] Debounce aggressive refreshes independently per normalized file path.
+  Completed on 2026-08-17. Each normalized path now owns one replaceable timer;
+  unrelated paths run independently, and reset, disposal, and deletion cancel
+  the applicable timers. Timer work uses the shared detached rejection boundary.
+  The cache suite passed with **111 passing**, the full suite passed with **1120
+  passing**, and scoped per-file coverage remained **100%** for all four metrics
+  under Node `v20.20.2`.
 
 #### Phase 7.3: Dependency results and eligibility
 
