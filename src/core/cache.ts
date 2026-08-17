@@ -15,6 +15,11 @@ import { CacheStore } from './cache/store'
 
 const logger = lw.log('Cacher')
 
+type RefreshRequest = {
+    filePath: string,
+    rootPath?: string
+}
+
 /**
  * Coordinates one independent cache state and its source-watcher subscriptions.
  * Every constructed instance must be disposed when its lifetime ends so its
@@ -22,6 +27,7 @@ const logger = lw.log('Cacher')
  */
 export class Cache implements vscode.Disposable {
     private readonly store = new CacheStore()
+    private readonly pendingRefreshes = new Map<string, RefreshRequest>()
     private readonly watcherSubscription: vscode.Disposable
     /** Coordinates the single outline reconstruction after current refreshes finish. */
     private cachingFilesCount = 0
@@ -244,6 +250,48 @@ export class Cache implements vscode.Disposable {
             logger.log(`File cannot be cached: ${filePath} .`)
             return
         }
+        const cacheKey = CacheStore.normalizePath(filePath)
+        const activeTask = this.store.getInFlight(filePath)
+        if (activeTask !== undefined) {
+            // Only the latest pending request matters because every queued caller
+            // waits for the same queue to become stable.
+            this.pendingRefreshes.set(cacheKey, {filePath, rootPath})
+            return activeTask
+        }
+
+        const task = this.runRefreshQueue(cacheKey, {filePath, rootPath})
+            .finally(() => {
+                this.pendingRefreshes.delete(cacheKey)
+                this.store.deleteInFlight(filePath)
+            })
+        this.store.setInFlight(filePath, task)
+        return task
+    }
+
+    /**
+     * Serializes refreshes for one normalized path. Requests received during a
+     * run collapse into one rerun, and the shared task settles only when no newer
+     * request remains. Recursive child refreshes still remain fire-and-forget so
+     * circular dependency graphs cannot create queue wait cycles.
+     */
+    private async runRefreshQueue(cacheKey: string, initialRequest: RefreshRequest): Promise<void> {
+        let request: RefreshRequest | undefined = initialRequest
+        while (request !== undefined) {
+            try {
+                await this.refreshFile(request.filePath, request.rootPath)
+            } catch (error) {
+                if (!this.pendingRefreshes.has(cacheKey)) {
+                    throw error
+                }
+                logger.log(`Caching ${request.filePath} failed before queued refresh: ${String(error)}`)
+            }
+            request = this.pendingRefreshes.get(cacheKey)
+            this.pendingRefreshes.delete(cacheKey)
+        }
+    }
+
+    /** Runs one refresh using the pre-Phase 7 atomicity and side-effect order. */
+    private async refreshFile(filePath: string, rootPath?: string): Promise<void> {
         logger.log(`Caching ${filePath} .`)
         this.cachingFilesCount++
         const openEditor: vscode.TextDocument | undefined = vscode.workspace.textDocuments.find(document => document.fileName === path.normalize(filePath))
@@ -267,23 +315,17 @@ export class Cache implements vscode.Disposable {
         // Same-file refreshes currently run concurrently and replace this shared
         // map entry. Any task's finally handler may therefore clear a newer task;
         // Phase 7 changes that behavior after the characterization baseline.
-        this.store.setInFlight(
-            filePath,
-            this.updateAST(fileCache)
-                .then(() => this.updateElements(fileCache, dependencyRoot))
-                .finally(() => {
-                    lw.lint.label.check()
-                    this.cachingFilesCount--
-                    this.store.deleteInFlight(filePath)
-                    lw.event.fire(lw.event.FileParsed, filePath)
+        await this.updateAST(fileCache)
+            .then(() => this.updateElements(fileCache, dependencyRoot))
+            .finally(() => {
+                lw.lint.label.check()
+                this.cachingFilesCount--
+                lw.event.fire(lw.event.FileParsed, filePath)
 
-                    if (this.cachingFilesCount === 0) {
-                        void lw.outline.reconstruct()
-                    }
-                })
-        )
-
-        return this.store.getInFlight(filePath)
+                if (this.cachingFilesCount === 0) {
+                    void lw.outline.reconstruct()
+                }
+            })
     }
 
     /**

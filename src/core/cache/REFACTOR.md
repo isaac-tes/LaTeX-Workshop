@@ -997,7 +997,13 @@ identity, per-path refresh coalescing, and atomic refresh/failure handling.
   focused cache suite passed with **88 passing**, and scoped per-file coverage
   reported **100%** statements, branches, functions, and lines for every cache
   file under Node `v20.20.2`.
-- [ ] Coalesce concurrent same-path refresh requests.
+- [x] Coalesce concurrent same-path refresh requests. Completed on 2026-08-17.
+  One active task now owns each normalized path; later requests collapse into a
+  single rerun using the latest arguments, while different paths remain
+  concurrent. A failed superseded run is logged and the final rerun determines
+  every caller's result. The focused cache suite passed with **90 passing**, and
+  scoped per-file coverage remained **100%** for all four metrics under Node
+  `v20.20.2`.
 - [ ] Commit refresh drafts atomically and handle failures at asynchronous
   boundaries.
 

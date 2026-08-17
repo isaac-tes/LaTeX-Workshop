@@ -632,7 +632,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             }
         })
 
-        it('should run same-file refreshes concurrently and let an earlier task clear the shared promise entry', async () => {
+        it('should coalesce same-file refreshes into one pending rerun shared by every caller', async () => {
             const texPath = get.path(fixture, 'main.tex')
             const parseStub = lw.parser.parse.tex as sinon.SinonStub
             const firstParse = deferred<any>()
@@ -648,28 +648,92 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 firstRefresh = lw.cache.refreshCache(texPath)
                 documentStub.restore()
 
+                await waitFor(() => parseStub.calledOnce)
+
                 documentStub = mock.textDocument(texPath, '\\section{second}', {isDirty: true})
                 secondRefresh = lw.cache.refreshCache(texPath)
-                documentStub.restore()
+                let firstSettled = false
+                void firstRefresh.then(() => {
+                    firstSettled = true
+                })
 
-                await waitFor(() => parseStub.callCount === 2)
-                assert.strictEqual(lw.cache.get(texPath)?.content, '\\section{second}')
+                await sleep(20)
+                assert.strictEqual(parseStub.callCount, 1)
                 assert.ok(lw.cache.promises.has(texPath))
 
                 firstParse.resolve(undefined)
-                await firstRefresh
+                await waitFor(() => parseStub.callCount === 2)
+                documentStub.restore()
 
-                assert.strictEqual(lw.cache.promises.get(texPath), undefined)
+                assert.strictEqual(firstSettled, false)
                 assert.strictEqual(lw.cache.get(texPath)?.content, '\\section{second}')
 
                 secondParse.resolve(undefined)
-                await secondRefresh
+                await Promise.all([firstRefresh, secondRefresh])
+                assert.strictEqual(lw.cache.promises.get(texPath), undefined)
             } finally {
                 firstParse.resolve(undefined)
                 secondParse.resolve(undefined)
                 if (firstRefresh && secondRefresh) {
                     await Promise.allSettled([firstRefresh, secondRefresh])
                 }
+                parseStub.reset()
+            }
+        })
+
+        it('should run a pending rerun after failure and use its result for every caller', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const parseStub = lw.parser.parse.tex as sinon.SinonStub
+            const firstParse = deferred<any>()
+            parseStub.reset()
+            parseStub.onFirstCall().returns(firstParse.promise)
+            parseStub.onSecondCall().resolves(undefined)
+
+            let firstRefresh: ReturnType<typeof lw.cache.refreshCache> | undefined
+            let secondRefresh: ReturnType<typeof lw.cache.refreshCache> | undefined
+            try {
+                firstRefresh = lw.cache.refreshCache(texPath)
+                await waitFor(() => parseStub.calledOnce)
+                secondRefresh = lw.cache.refreshCache(texPath)
+
+                firstParse.reject(new Error('superseded refresh failure'))
+                await Promise.all([firstRefresh, secondRefresh])
+
+                sinon.assert.calledTwice(parseStub)
+                assert.hasLog(`Caching ${texPath} failed before queued refresh: Error: superseded refresh failure`)
+            } finally {
+                firstParse.resolve(undefined)
+                if (firstRefresh && secondRefresh) {
+                    await Promise.allSettled([firstRefresh, secondRefresh])
+                }
+                parseStub.reset()
+            }
+        })
+
+        it('should allow different files to refresh concurrently', async () => {
+            const firstPath = get.path(fixture, 'main.tex')
+            const secondPath = get.path(fixture, 'another.tex')
+            const parseStub = lw.parser.parse.tex as sinon.SinonStub
+            const firstParse = deferred<any>()
+            const secondParse = deferred<any>()
+            parseStub.reset()
+            parseStub.onFirstCall().returns(firstParse.promise)
+            parseStub.onSecondCall().returns(secondParse.promise)
+
+            const firstRefresh = lw.cache.refreshCache(firstPath)
+            const secondRefresh = lw.cache.refreshCache(secondPath)
+            try {
+                await waitFor(() => parseStub.callCount === 2)
+                assert.ok(lw.cache.promises.has(firstPath))
+                assert.ok(lw.cache.promises.has(secondPath))
+
+                firstParse.resolve(undefined)
+                secondParse.resolve(undefined)
+                await Promise.all([firstRefresh, secondRefresh])
+            } finally {
+                firstParse.resolve(undefined)
+                secondParse.resolve(undefined)
+                await Promise.allSettled([firstRefresh, secondRefresh])
                 parseStub.reset()
             }
         })
