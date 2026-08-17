@@ -361,7 +361,8 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     describe('lw.file.getBibPath', () => {
         it('should correctly find BibTeX files', async () => {
             set.root(fixture, 'main.tex')
-            const result = await lw.file.getBibPath('main.bib', lw.root.dir.path ?? '')
+            const rootDir = lw.root.dir.path ?? ''
+            const result = await lw.file.getBibPath('main.bib', rootDir, rootDir)
             assert.listStrictEqual(result, [
                 path.resolve(lw.root.dir.path ?? '', 'main.bib')
             ])
@@ -369,7 +370,8 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
         it('should correctly find BibTeX files in basedir', async () => {
             set.root(fixture, 'main.tex')
-            const result = await lw.file.getBibPath('sub.bib', path.resolve(lw.root.dir.path ?? '', 'subdir'))
+            const rootDir = lw.root.dir.path ?? ''
+            const result = await lw.file.getBibPath('sub.bib', rootDir, path.resolve(rootDir, 'subdir'))
             assert.listStrictEqual(result, [
                 path.resolve(lw.root.dir.path ?? '', 'subdir', 'sub.bib')
             ])
@@ -378,22 +380,42 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         it('should correctly find BibTeX files in `latex.bibDirs`', async () => {
             set.root(fixture, 'main.tex')
             set.config('latex.bibDirs', [ path.resolve(lw.root.dir.path ?? '', 'subdir') ])
-            const result = await lw.file.getBibPath('sub.bib', lw.root.dir.path ?? '')
+            const rootDir = lw.root.dir.path ?? ''
+            const result = await lw.file.getBibPath('sub.bib', rootDir, rootDir)
             assert.listStrictEqual(result, [
                 path.resolve(lw.root.dir.path ?? '', 'subdir', 'sub.bib')
             ])
         })
 
+        it('should search the explicit owner root before the source base and configured directories', async () => {
+            set.root(fixture, 'main.tex')
+            set.config('latex.bibDirs', ['/configured/bibliography'])
+            const resolveStub = sinon.stub(utils, 'resolveFile').resolves('/owner/references.bib')
+
+            const result = await lw.file.getBibPath('references', '/owner', '/source')
+            resolveStub.restore()
+
+            sinon.assert.calledOnceWithExactly(
+                resolveStub,
+                ['/owner', '/source', '/configured/bibliography'],
+                'references',
+                '.bib'
+            )
+            assert.deepStrictEqual(result, ['/owner/references.bib'])
+        })
+
         it('should return an empty array when no BibTeX file is found', async () => {
             set.root(fixture, 'main.tex')
             set.config('latex.bibDirs', [ path.resolve(lw.root.dir.path ?? '', 'subdir') ])
-            const result = await lw.file.getBibPath('nonexistent.bib', path.resolve(lw.root.dir.path ?? '', 'output'))
+            const rootDir = lw.root.dir.path ?? ''
+            const result = await lw.file.getBibPath('nonexistent.bib', rootDir, path.resolve(rootDir, 'output'))
             assert.listStrictEqual(result, [ ])
         })
 
         it('should correctly handle wildcard in BibTeX file name', async () => {
             set.root(fixture, 'main.tex')
-            const result = await lw.file.getBibPath('*.bib', lw.root.dir.path ?? '')
+            const rootDir = lw.root.dir.path ?? ''
+            const result = await lw.file.getBibPath('*.bib', rootDir, rootDir)
             assert.listStrictEqual(result, [
                 path.resolve(lw.root.dir.path ?? '', 'main.bib'),
                 path.resolve(lw.root.dir.path ?? '', 'another.bib')
@@ -404,7 +426,8 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const stub = sinon.stub(lw.external, 'sync').returns({ pid: 0, status: 0, stdout: get.path(fixture, 'nonexistent.bib'), output: [''], stderr: '', signal: 'SIGTERM' })
             set.config('kpsewhich.bibtex.enabled', false)
             set.root(fixture, 'main.tex')
-            const result = await lw.file.getBibPath('nonexistent.bib', lw.root.dir.path ?? '')
+            const rootDir = lw.root.dir.path ?? ''
+            const result = await lw.file.getBibPath('nonexistent.bib', rootDir, rootDir)
             stub.restore()
             assert.listStrictEqual(result, [ ])
         })
@@ -415,7 +438,8 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const stub = sinon.stub(lw.external, 'sync').returns({ pid: 0, status: 0, stdout: get.path(fixture, 'nonexistent.bib'), output: [''], stderr: '', signal: 'SIGTERM' })
             set.config('kpsewhich.bibtex.enabled', true)
             set.root(fixture, 'main.tex')
-            const result = await lw.file.getBibPath('nonexistent.bib', lw.root.dir.path ?? '')
+            const rootDir = lw.root.dir.path ?? ''
+            const result = await lw.file.getBibPath('nonexistent.bib', rootDir, rootDir)
             stub.restore()
             assert.listStrictEqual(result, [ nonPath ])
         })
@@ -424,9 +448,38 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const stub = sinon.stub(lw.external, 'sync').returns({ pid: 0, status: 0, stdout: '', output: [''], stderr: '', signal: 'SIGTERM' })
             set.config('kpsewhich.bibtex.enabled', true)
             set.root(fixture, 'main.tex')
-            const result = await lw.file.getBibPath('another-nonexistent.bib', lw.root.dir.path ?? '')
+            const rootDir = lw.root.dir.path ?? ''
+            const result = await lw.file.getBibPath('another-nonexistent.bib', rootDir, rootDir)
             stub.restore()
             assert.listStrictEqual(result, [ ])
+        })
+
+        it('should run the kpsewhich fallback from the explicit owner root', async () => {
+            set.root(fixture, 'main.tex')
+            set.config('kpsewhich.bibtex.enabled', true)
+            const ownerRoot = path.resolve('/owner')
+            const sourceBase = path.resolve('/source')
+            const resolveStub = sinon.stub(utils, 'resolveFile').resolves(undefined)
+            const syncStub = sinon.stub(lw.external, 'sync').returns({
+                pid: 0,
+                status: 0,
+                stdout: 'explicit-owner.bib',
+                output: [''],
+                stderr: '',
+                signal: 'SIGTERM'
+            })
+
+            const result = await lw.file.getBibPath('explicit-owner', ownerRoot, sourceBase)
+            resolveStub.restore()
+            syncStub.restore()
+
+            sinon.assert.calledOnceWithExactly(
+                syncStub,
+                sinon.match.string,
+                ['-format=.bib', 'explicit-owner'],
+                {cwd: ownerRoot}
+            )
+            assert.deepStrictEqual(result, [path.resolve(ownerRoot, 'explicit-owner.bib')])
         })
     })
 
@@ -794,7 +847,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const platformStub = sinon.stub(os, 'platform').returns('win32')
             const resolveStub = sinon.stub(utils, 'resolveFile').resolves('C:\\Project\\References.bib')
 
-            const result = await lw.file.getBibPath('references', 'C:\\Project')
+            const result = await lw.file.getBibPath('references', 'C:\\Project', 'C:\\Project')
             platformStub.restore()
             resolveStub.restore()
 

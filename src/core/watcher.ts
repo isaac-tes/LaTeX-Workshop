@@ -50,30 +50,43 @@ class Watcher {
     constructor(readonly fileExt: '.*' | '.bib' | '.pdf' = '.*') {}
 
     /**
+     * Registers one handler and returns ownership of that subscription to the
+     * caller. Watcher resets intentionally preserve handler subscriptions;
+     * only disposing this value removes the handler.
+     */
+    private registerHandler(handlers: Set<(uri: vscode.Uri) => void>, handler: (uri: vscode.Uri) => void): vscode.Disposable {
+        handlers.add(handler)
+        return new vscode.Disposable(() => handlers.delete(handler))
+    }
+
+    /**
      * Adds a handler for file creation events.
      *
      * @param {(uri: vscode.Uri) => void} handler - The handler function.
+     * @returns A disposable that unregisters the handler.
      */
-    onCreate(handler: (uri: vscode.Uri) => void) {
-        this.onCreateHandlers.add(handler)
+    onCreate(handler: (uri: vscode.Uri) => void): vscode.Disposable {
+        return this.registerHandler(this.onCreateHandlers, handler)
     }
 
     /**
      * Adds a handler for file change events.
      *
      * @param {(uri: vscode.Uri) => void} handler - The handler function.
+     * @returns A disposable that unregisters the handler.
      */
-    onChange(handler: (uri: vscode.Uri) => void) {
-        this.onChangeHandlers.add(handler)
+    onChange(handler: (uri: vscode.Uri) => void): vscode.Disposable {
+        return this.registerHandler(this.onChangeHandlers, handler)
     }
 
     /**
      * Adds a handler for file deletion events.
      *
      * @param {(uri: vscode.Uri) => void} handler - The handler function.
+     * @returns A disposable that unregisters the handler.
      */
-    onDelete(handler: (uri: vscode.Uri) => void) {
-        this.onDeleteHandlers.add(handler)
+    onDelete(handler: (uri: vscode.Uri) => void): vscode.Disposable {
+        return this.registerHandler(this.onDeleteHandlers, handler)
     }
 
     /**
