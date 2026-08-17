@@ -1,4 +1,3 @@
-import * as vscode from 'vscode'
 import * as path from 'path'
 import * as sinon from 'sinon'
 
@@ -6,17 +5,15 @@ import { assert, get, mock, set } from '../utils'
 import { lw } from '../../../src/lw'
 import type { FileCache } from '../../../src/types'
 import {
-    type DependencyContext,
-    getIncludedTeX,
-    updateDependencies
+    type DependencyDiscovery,
+    discoverDependencies,
+    getIncludedTeX
 } from '../../../src/core/cache/dependencies'
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     const fixture = get.path('01_core', 'cache')
     let caches: Map<string, FileCache>
-    let watchSource: sinon.SinonSpy
-    let refreshSource: sinon.SinonSpy
-    let context: DependencyContext
+    let sandbox: sinon.SinonSandbox
 
     function createFileCache(filePath: string, contentTrimmed = ''): FileCache {
         return {
@@ -36,34 +33,41 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         return createFileCache(filePath, (await lw.file.read(filePath)) ?? '')
     }
 
+    async function discover(fileCache: FileCache, rootPath: string): Promise<DependencyDiscovery[]> {
+        const discoveries: DependencyDiscovery[] = []
+        const source = {
+            filePath: fileCache.filePath,
+            contentTrimmed: fileCache.contentTrimmed,
+            childPaths: fileCache.children.map(child => child.filePath)
+        }
+        for await (const discovery of discoverDependencies(source, rootPath)) {
+            discoveries.push(discovery)
+        }
+        return discoveries
+    }
+
     before(() => {
         mock.init(lw, 'watcher', 'cache')
     })
 
     beforeEach(() => {
+        sandbox = sinon.createSandbox()
         caches = new Map()
-        watchSource = sinon.spy()
-        refreshSource = sinon.spy()
-        context = {
-            getCache: filePath => caches.get(filePath),
-            watchSource,
-            refreshSource
-        }
+    })
+
+    afterEach(() => {
+        sandbox.restore()
     })
 
     after(() => {
         sinon.restore()
     })
 
-    describe('updateDependencies inputs', () => {
-        it('should leave children empty when there are no dependencies', async () => {
+    describe('discoverDependencies inputs', () => {
+        it('should return no discoveries without dependencies', async () => {
             const fileCache = await readFileCache('main.tex')
 
-            await updateDependencies(fileCache, fileCache.filePath, context)
-
-            assert.listStrictEqual(fileCache.children, [])
-            sinon.assert.notCalled(watchSource)
-            sinon.assert.notCalled(refreshSource)
+            assert.deepStrictEqual(await discover(fileCache, fileCache.filePath), [])
         })
 
         it('should stop scanning when an input cannot be resolved', async () => {
@@ -72,74 +76,32 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 '\\input{missing.tex}\\input{../main.tex}'
             )
 
-            await updateDependencies(fileCache, fileCache.filePath, context)
-
-            assert.listStrictEqual(fileCache.children, [])
-            sinon.assert.notCalled(watchSource)
+            assert.deepStrictEqual(await discover(fileCache, fileCache.filePath), [])
         })
 
-        it('should ignore an input that resolves to the root', async () => {
+        it('should ignore missing inputs and inputs that resolve to the root', async () => {
             const rootPath = get.path(fixture, 'main.tex')
             const fileCache = await readFileCache('update_children', 'input_main.tex')
+            const exists = sandbox.stub(lw.file, 'exists').resolves(false)
 
-            await updateDependencies(fileCache, rootPath, context)
-
-            assert.listStrictEqual(fileCache.children, [])
+            assert.deepStrictEqual(await discover(fileCache, get.path(fixture, 'another.tex')), [])
+            sinon.assert.called(exists)
+            exists.restore()
+            assert.deepStrictEqual(await discover(fileCache, rootPath), [])
         })
 
-        it('should add, watch, and schedule an input with the inherited root', async () => {
-            const inputPath = get.path(fixture, 'main.tex')
+        it('should preserve input order, roots, first indices, and exact-path de-duplication', async () => {
             const rootPath = get.path(fixture, 'another.tex')
-            const fileCache = await readFileCache('update_children', 'input_main.tex')
-
-            await updateDependencies(fileCache, rootPath, context)
-
-            assert.pathListStrictEqual(fileCache.children.map(child => child.filePath), [inputPath])
-            sinon.assert.calledOnceWithExactly(watchSource, inputPath)
-            sinon.assert.calledOnceWithExactly(refreshSource, inputPath, rootPath)
-        })
-
-        it('should preserve input order when scheduling multiple children', async () => {
             const mainPath = get.path(fixture, 'main.tex')
-            const anotherPath = get.path(fixture, 'another.tex')
-            const fileCache = await readFileCache('update_children', 'two_inputs.tex')
-
-            await updateDependencies(fileCache, fileCache.filePath, context)
-
-            assert.pathListStrictEqual(
-                fileCache.children.map(child => child.filePath),
-                [mainPath, anotherPath]
-            )
-            assert.deepStrictEqual(refreshSource.args, [
-                [mainPath, fileCache.filePath],
-                [anotherPath, fileCache.filePath]
-            ])
-        })
-
-        it('should keep the first source index for duplicate inputs', async () => {
-            const inputPath = get.path(fixture, 'main.tex')
             const fileCache = await readFileCache('update_children', 'two_same_inputs.tex')
             const firstIndex = fileCache.contentTrimmed.indexOf('\\input')
 
-            await updateDependencies(fileCache, fileCache.filePath, context)
+            assert.deepStrictEqual(await discover(fileCache, rootPath), [{
+                kind: 'input', filePath: mainPath, index: firstIndex, rootPath
+            }])
 
-            assert.strictEqual(fileCache.children.length, 1)
-            assert.pathStrictEqual(fileCache.children[0].filePath, inputPath)
-            assert.strictEqual(fileCache.children[0].index, firstIndex)
-            sinon.assert.calledOnce(watchSource)
-            sinon.assert.calledOnce(refreshSource)
-        })
-
-        it('should add but not reschedule an input that is already watched', async () => {
-            const inputPath = get.path(fixture, 'main.tex')
-            const fileCache = await readFileCache('update_children', 'input_main.tex')
-            lw.watcher.src.add(vscode.Uri.file(inputPath))
-
-            await updateDependencies(fileCache, fileCache.filePath, context)
-
-            assert.pathListStrictEqual(fileCache.children.map(child => child.filePath), [inputPath])
-            sinon.assert.notCalled(watchSource)
-            sinon.assert.notCalled(refreshSource)
+            fileCache.children.push({filePath: mainPath, index: -1})
+            assert.deepStrictEqual(await discover(fileCache, rootPath), [])
         })
 
         it('should exhaust input matches before earlier noweb child matches', async () => {
@@ -150,175 +112,85 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 "<<child='../another.tex'>>=\n\\input{../main.tex}"
             )
 
-            await updateDependencies(fileCache, fileCache.filePath, context)
+            const discoveries = await discover(fileCache, fileCache.filePath)
 
-            assert.pathListStrictEqual(
-                fileCache.children.map(child => child.filePath),
-                [inputPath, childPath]
-            )
-            assert.ok(fileCache.children[0].index > fileCache.children[1].index)
+            assert.pathListStrictEqual(discoveries.map(discovery => discovery.filePath), [inputPath, childPath])
+            assert.ok((discoveries[0] as Extract<DependencyDiscovery, {kind: 'input'}>).index >
+                (discoveries[1] as Extract<DependencyDiscovery, {kind: 'input'}>).index)
         })
     })
 
-    describe('updateDependencies external documents', () => {
-        it('should ignore an external document that cannot be resolved', async () => {
-            const fileCache = await readFileCache('update_children_xr', 'file_not_exist.tex')
-            caches.set(fileCache.filePath, fileCache)
+    describe('discoverDependencies external documents', () => {
+        it('should ignore unresolved, missing, and root external documents', async () => {
+            const unresolved = await readFileCache('update_children_xr', 'file_not_exist.tex')
+            assert.deepStrictEqual(await discover(unresolved, unresolved.filePath), [])
 
-            await updateDependencies(fileCache, fileCache.filePath, context)
+            const source = await readFileCache('update_children_xr', 'input_main.tex')
+            const exists = sandbox.stub(lw.file, 'exists').resolves(false)
+            assert.deepStrictEqual(await discover(source, source.filePath), [])
+            exists.restore()
 
-            assert.deepStrictEqual(fileCache.external, {})
-            sinon.assert.notCalled(watchSource)
-        })
-
-        it('should ignore an external document that resolves to the root', async () => {
             const rootPath = get.path(fixture, 'main.tex')
-            const fileCache = await readFileCache('update_children_xr', 'input_main.tex')
-            caches.set(rootPath, createFileCache(rootPath))
-
-            await updateDependencies(fileCache, rootPath, context)
-
-            assert.deepStrictEqual(caches.get(rootPath)?.external, {})
-            sinon.assert.notCalled(watchSource)
+            assert.deepStrictEqual(await discover(source, rootPath), [])
         })
 
-        it('should attach an external document to the root cache', async () => {
+        it('should describe an external owner, separate refresh root, and prefix', async () => {
             const externalPath = get.path(fixture, 'main.tex')
             const rootPath = get.path(fixture, 'another.tex')
-            const rootCache = createFileCache(rootPath)
-            const fileCache = await readFileCache('update_children_xr', 'input_main.tex')
-            caches.set(rootPath, rootCache)
+            const source = await readFileCache('update_children_xr', 'input_main_prefix.tex')
 
-            await updateDependencies(fileCache, rootPath, context)
-
-            assert.deepStrictEqual(rootCache.external, {[externalPath]: ''})
-            assert.deepStrictEqual(fileCache.external, {})
-            sinon.assert.calledOnceWithExactly(watchSource, externalPath)
-            sinon.assert.calledOnceWithExactly(refreshSource, externalPath, externalPath)
+            assert.deepStrictEqual(await discover(source, rootPath), [{
+                kind: 'external',
+                filePath: externalPath,
+                prefix: 'prefix',
+                ownerPath: rootPath,
+                rootPath: externalPath
+            }])
         })
 
-        it('should resolve an external document next to the source', async () => {
-            const externalPath = get.path(fixture, 'main.tex')
-            const fileCache = await readFileCache('update_children_xr', 'input_main.tex')
-            caches.set(fileCache.filePath, fileCache)
-
-            await updateDependencies(fileCache, fileCache.filePath, context)
-
-            assert.deepStrictEqual(fileCache.external, {[externalPath]: ''})
-        })
-
-        it('should resolve an external document next to the root', async () => {
+        it('should resolve external documents next to the root and in latex.texDirs', async () => {
             const rootPath = get.path(fixture, 'update_children_xr', 'sub', 'main.tex')
             const externalPath = get.path(fixture, 'update_children_xr', 'sub', 'sub.tex')
-            const rootCache = createFileCache(rootPath)
-            const fileCache = await readFileCache('update_children_xr', 'input_sub.tex')
-            caches.set(rootPath, rootCache)
+            const source = await readFileCache('update_children_xr', 'input_sub.tex')
 
-            await updateDependencies(fileCache, rootPath, context)
+            assert.pathStrictEqual((await discover(source, rootPath))[0].filePath, externalPath)
 
-            assert.deepStrictEqual(rootCache.external, {[externalPath]: ''})
-        })
-
-        it('should resolve an external document from latex.texDirs', async () => {
-            const rootPath = get.path(fixture, 'main.tex')
-            const externalPath = get.path(fixture, 'update_children_xr', 'sub', 'sub.tex')
-            const rootCache = createFileCache(rootPath)
-            const fileCache = await readFileCache('update_children_xr', 'input_sub.tex')
-            caches.set(rootPath, rootCache)
             set.config('latex.texDirs', [get.path(fixture, 'update_children_xr', 'sub')])
-
-            await updateDependencies(fileCache, rootPath, context)
-
-            assert.deepStrictEqual(rootCache.external, {[externalPath]: ''})
-        })
-
-        it('should preserve an external document prefix', async () => {
-            const externalPath = get.path(fixture, 'main.tex')
-            const fileCache = await readFileCache('update_children_xr', 'input_main_prefix.tex')
-            caches.set(fileCache.filePath, fileCache)
-
-            await updateDependencies(fileCache, fileCache.filePath, context)
-
-            assert.deepStrictEqual(fileCache.external, {[externalPath]: 'prefix'})
-        })
-
-        it('should not reschedule an external document that is already watched', async () => {
-            const externalPath = get.path(fixture, 'main.tex')
-            const fileCache = await readFileCache('update_children_xr', 'input_main.tex')
-            caches.set(fileCache.filePath, fileCache)
-            lw.watcher.src.add(vscode.Uri.file(externalPath))
-
-            await updateDependencies(fileCache, fileCache.filePath, context)
-
-            assert.deepStrictEqual(fileCache.external, {[externalPath]: ''})
-            sinon.assert.notCalled(watchSource)
-            sinon.assert.notCalled(refreshSource)
-        })
-
-        it('should still schedule an external document when the root cache is missing', async () => {
-            const externalPath = get.path(fixture, 'main.tex')
-            const fileCache = await readFileCache('update_children_xr', 'input_main.tex')
-
-            await updateDependencies(fileCache, fileCache.filePath, context)
-
-            assert.deepStrictEqual(fileCache.external, {})
-            sinon.assert.calledOnceWithExactly(watchSource, externalPath)
-            sinon.assert.calledOnceWithExactly(refreshSource, externalPath, externalPath)
+            const otherRoot = get.path(fixture, 'main.tex')
+            assert.pathStrictEqual((await discover(source, otherRoot))[0].filePath, externalPath)
         })
     })
 
     describe('getIncludedTeX', () => {
+        const lookup = (filePath: string) => caches.get(filePath)
+
         it('should return the supplied Set unchanged without a starting file', () => {
             const included = new Set(['/seed.tex'])
-
-            const result = getIncludedTeX(undefined, context, included)
-
+            const result = getIncludedTeX(undefined, lookup, included)
             assert.strictEqual(result, included)
             assert.deepStrictEqual([...result], ['/seed.tex'])
         })
 
         it('should return an empty Set when the starting file is not cached', () => {
-            assert.strictEqual(getIncludedTeX('/missing.tex', context).size, 0)
+            assert.strictEqual(getIncludedTeX('/missing.tex', lookup).size, 0)
         })
 
-        it('should traverse dependencies depth first in child order', () => {
-            const root = createFileCache('/root.tex')
-            const first = createFileCache('/first.tex')
-            const second = createFileCache('/second.tex')
-            root.children.push(
-                {filePath: first.filePath, index: 0},
-                {filePath: second.filePath, index: 1}
-            )
-            caches.set(root.filePath, root)
-            caches.set(first.filePath, first)
-            caches.set(second.filePath, second)
-
-            const result = getIncludedTeX(root.filePath, context)
-
-            assert.deepStrictEqual([...result], [root.filePath, first.filePath, second.filePath])
-        })
-
-        it('should prevent cycles and de-duplicate shared descendants', () => {
+        it('should traverse depth first while preventing cycles and shared duplicates', () => {
             const root = createFileCache('/root.tex')
             const first = createFileCache('/first.tex')
             const second = createFileCache('/second.tex')
             const shared = createFileCache('/shared.tex')
-            root.children.push(
-                {filePath: first.filePath, index: 0},
-                {filePath: second.filePath, index: 1}
-            )
-            first.children.push(
-                {filePath: root.filePath, index: 0},
-                {filePath: shared.filePath, index: 1}
-            )
+            root.children.push({filePath: first.filePath, index: 0}, {filePath: second.filePath, index: 1})
+            first.children.push({filePath: root.filePath, index: 0}, {filePath: shared.filePath, index: 1})
             second.children.push({filePath: shared.filePath, index: 0})
             for (const cache of [root, first, second, shared]) {
                 caches.set(cache.filePath, cache)
             }
 
-            const result = getIncludedTeX(root.filePath, context)
-
-            assert.deepStrictEqual([...result], [root.filePath, first.filePath, shared.filePath, second.filePath])
+            assert.deepStrictEqual(
+                [...getIncludedTeX(root.filePath, lookup)],
+                [root.filePath, first.filePath, shared.filePath, second.filePath]
+            )
         })
     })
 })

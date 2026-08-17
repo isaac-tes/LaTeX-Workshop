@@ -478,29 +478,66 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.listStrictEqual(lw.cache.paths(), [texPath])
         })
 
-        it('should coordinate dependency updates with the owning instance', async () => {
+        it('should apply dependency discoveries through the owning instance', async () => {
             const texPath = get.path(fixture, 'main.tex')
             const instance = new Cache()
-            const updateStub = sinon.stub(dependencies, 'updateDependencies').resolves()
+            const childPath = '/phase6/child.tex'
+            const watchedPath = '/phase6/watched.tex'
+            const externalPath = '/phase6/external.tex'
+            const unprefixedPath = '/phase6/unprefixed.tex'
+            const missingOwnerPath = '/phase6/missing-owner.tex'
+            lw.watcher.src.add(vscode.Uri.file(watchedPath))
+            const discoverStub = sinon.stub(dependencies, 'discoverDependencies').callsFake(async function* () {
+                await Promise.resolve()
+                yield {kind: 'input' as const, filePath: childPath, index: 7, rootPath: texPath}
+                yield {kind: 'input' as const, filePath: watchedPath, index: 8, rootPath: texPath}
+                yield {
+                    kind: 'external' as const,
+                    filePath: externalPath,
+                    prefix: 'xr-',
+                    ownerPath: texPath,
+                    rootPath: externalPath
+                }
+                yield {
+                    kind: 'external' as const,
+                    filePath: unprefixedPath,
+                    prefix: '',
+                    ownerPath: texPath,
+                    rootPath: unprefixedPath
+                }
+                yield {
+                    kind: 'external' as const,
+                    filePath: missingOwnerPath,
+                    prefix: '',
+                    ownerPath: '/phase6/not-cached.tex',
+                    rootPath: missingOwnerPath
+                }
+            })
+            const originalRefresh = instance.refreshCache.bind(instance)
+            const refreshStub = sinon.stub(instance, 'refreshCache').resolves()
+            const addStub = sinon.stub(instance, 'add')
 
             try {
-                await instance.refreshCache(texPath)
-                const [fileCache, rootPath, context] = updateStub.firstCall.args
-                assert.strictEqual(fileCache.filePath, texPath)
-                assert.strictEqual(rootPath, texPath)
-
-                const getSpy = sinon.spy(instance, 'get')
-                const addStub = sinon.stub(instance, 'add')
-                const refreshStub = sinon.stub(instance, 'refreshCache').resolves()
-                assert.strictEqual(context.getCache(texPath), fileCache)
-                context.watchSource(texPath)
-                context.refreshSource(texPath, rootPath)
-
-                sinon.assert.calledOnceWithExactly(getSpy, texPath)
-                sinon.assert.calledOnceWithExactly(addStub, texPath)
-                sinon.assert.calledOnceWithExactly(refreshStub, texPath, rootPath)
+                await originalRefresh(texPath)
+                const fileCache = instance.get(texPath)
+                assert.deepStrictEqual(fileCache?.children, [
+                    {filePath: childPath, index: 7},
+                    {filePath: watchedPath, index: 8}
+                ])
+                assert.deepStrictEqual(fileCache?.external, {[externalPath]: 'xr-', [unprefixedPath]: ''})
+                assert.strictEqual(discoverStub.firstCall.args[0].filePath, texPath)
+                assert.strictEqual(discoverStub.firstCall.args[1], texPath)
+                assert.deepStrictEqual(addStub.args.map(args => args[0]), [
+                    childPath, externalPath, unprefixedPath, missingOwnerPath
+                ])
+                assert.deepStrictEqual(refreshStub.args, [
+                    [childPath, texPath],
+                    [externalPath, externalPath],
+                    [unprefixedPath, unprefixedPath],
+                    [missingOwnerPath, missingOwnerPath]
+                ])
             } finally {
-                updateStub.restore()
+                discoverStub.restore()
                 instance.dispose()
             }
         })
@@ -512,28 +549,32 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.hasLog('Parsed LaTeX AST in ')
         })
 
-        it('should coordinate bibliography updates with the owning instance', async () => {
+        it('should apply bibliography discoveries through the owning instance', async () => {
             const texPath = get.path(fixture, 'main.tex')
+            const bibPath = get.path(fixture, 'main.bib')
+            const excludedPath = '/phase6/excluded.bib'
             const instance = new Cache()
-            const updateStub = sinon.stub(bibliography, 'updateBibliography').resolves()
+            set.config('latex.watch.files.ignore', ['**/excluded.bib'])
+            const discoverStub = sinon.stub(bibliography, 'discoverBibliography').callsFake(async function* () {
+                await Promise.resolve()
+                yield {kind: 'bibtex' as const, filePath: bibPath}
+                yield {kind: 'bibtex' as const, filePath: bibPath}
+                yield {kind: 'bibtex' as const, filePath: excludedPath}
+                yield {kind: 'glossary' as const, filePath: ''}
+                yield {kind: 'glossary' as const, filePath: bibPath}
+                yield {kind: 'glossary' as const, filePath: bibPath}
+            })
 
             try {
                 await instance.refreshCache(texPath)
-                const [fileCache, context] = updateStub.firstCall.args
-                assert.strictEqual(fileCache.filePath, texPath)
-
-                const getSpy = sinon.spy(instance, 'get')
-                const internalInstance = instance as unknown as {isExcluded: (filePath: string) => boolean}
-                const isExcludedSpy = sinon.spy(internalInstance, 'isExcluded')
-                assert.strictEqual(context.getCache(texPath), fileCache)
-                context.isExcluded(get.path(fixture, 'main.bbl'))
-
-                sinon.assert.calledOnceWithExactly(getSpy, texPath)
-                sinon.assert.calledOnceWithExactly(isExcludedSpy, get.path(fixture, 'main.bbl'))
-                getSpy.restore()
-                isExcludedSpy.restore()
+                assert.deepStrictEqual([...instance.get(texPath)!.bibfiles], [bibPath])
+                assert.deepStrictEqual([...instance.get(texPath)!.glossarybibfiles], [bibPath])
+                assert.strictEqual(discoverStub.firstCall.args[0].filePath, texPath)
+                assert.strictEqual(discoverStub.firstCall.args[1], path.dirname(texPath))
+                assert.ok(lw.watcher.bib.has(vscode.Uri.file(bibPath)))
+                assert.ok(lw.watcher.glossary.has(vscode.Uri.file(bibPath)))
             } finally {
-                updateStub.restore()
+                discoverStub.restore()
                 instance.dispose()
             }
         })
@@ -822,23 +863,84 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     })
 
     describe('lw.cache auxiliary coordination', () => {
-        it('should forward FLS workflows through one owning instance context', async () => {
-            const loadStub = sinon.stub(auxiliaries, 'loadFlsFile').resolves()
+        it('should apply FLS discoveries and forward raw child queries', async () => {
+            const owner = get.path(fixture, 'main.tex')
+            const child = '/phase6/fls-child.tex'
+            const input = '/phase6/generated.out'
+            const bib = get.path(fixture, 'main.bib')
+            set.config('latex.watch.files.ignore', [])
+            await lw.cache.refreshCache(owner)
+            const discoverStub = sinon.stub(auxiliaries, 'discoverFls').callsFake(async function* () {
+                await Promise.resolve()
+                yield {kind: 'input' as const, filePath: child, flsPath: '/phase6/main.fls', isTeX: true, ownerPath: owner}
+                yield {kind: 'input' as const, filePath: input, flsPath: '/phase6/main.fls', isTeX: false, ownerPath: owner}
+                yield {kind: 'bibliography' as const, filePath: bib, auxPath: '/phase6/main.aux', ownerPath: owner}
+                yield {kind: 'bibliography' as const, filePath: bib, auxPath: '/phase6/main.aux', ownerPath: owner}
+            })
             const childrenStub = sinon.stub(auxiliaries, 'getFlsChildren').resolves(['/child.tex'])
+            const existsStub = sinon.stub(lw.file, 'exists').resolves({type: vscode.FileType.File, ctime: 0, mtime: 0, size: 0})
+            const refreshStub = sinon.stub(lw.cache, 'refreshCache').resolves()
+            const addSpy = sinon.spy(lw.cache, 'add')
 
             try {
-                await lw.cache.loadFlsFile('/owner.tex')
+                await lw.cache.loadFlsFile(owner)
                 assert.deepStrictEqual(await lw.cache.getFlsChildren('/candidate.tex'), ['/child.tex'])
 
-                sinon.assert.calledOnceWithExactly(loadStub, '/owner.tex', loadStub.firstCall.args[1])
+                sinon.assert.calledOnceWithExactly(discoverStub, owner)
                 sinon.assert.calledOnceWithExactly(childrenStub, '/candidate.tex')
-                assert.strictEqual(typeof loadStub.firstCall.args[1].getCache, 'function')
-                assert.strictEqual(typeof loadStub.firstCall.args[1].isExcluded, 'function')
-                assert.strictEqual(typeof loadStub.firstCall.args[1].watchSource, 'function')
-                assert.strictEqual(typeof loadStub.firstCall.args[1].refreshSource, 'function')
+                assert.deepStrictEqual(lw.cache.get(owner)?.children.slice(-1), [{filePath: child, index: Number.MAX_VALUE}])
+                sinon.assert.calledWith(addSpy, child)
+                sinon.assert.calledWith(addSpy, input)
+                assert.deepStrictEqual([...lw.cache.get(owner)!.bibfiles], [bib])
+                assert.ok(lw.watcher.bib.has(vscode.Uri.file(bib)))
+                sinon.assert.calledOnceWithExactly(refreshStub, child, owner)
             } finally {
-                loadStub.restore()
+                discoverStub.restore()
                 childrenStub.restore()
+                existsStub.restore()
+                refreshStub.restore()
+                addSpy.restore()
+            }
+        })
+
+        it('should preserve FLS filtering order and stop TeX application when owner recovery fails', async () => {
+            const owner = '/phase6/missing-owner.tex'
+            const excludedInput = '/phase6/excluded.tex'
+            const missingInput = '/phase6/missing.tex'
+            const watchedInput = '/phase6/watched.tex'
+            const child = '/phase6/child.tex'
+            const excludedBib = '/phase6/excluded.bib'
+            const watchedBib = get.path(fixture, 'main.bib')
+            const instance = new Cache()
+            set.config('latex.watch.files.ignore', ['**/excluded.tex', '**/excluded.bib'])
+            lw.watcher.src.add(vscode.Uri.file(watchedInput))
+            lw.watcher.bib.add(vscode.Uri.file(watchedBib))
+            const discoverStub = sinon.stub(auxiliaries, 'discoverFls').callsFake(async function* () {
+                await Promise.resolve()
+                for (const filePath of [excludedInput, missingInput, owner, watchedInput, child]) {
+                    yield {kind: 'input' as const, filePath, flsPath: '/phase6/main.fls', isTeX: true, ownerPath: owner}
+                }
+                yield {kind: 'bibliography' as const, filePath: excludedBib, auxPath: '/phase6/main.aux', ownerPath: owner}
+                yield {kind: 'bibliography' as const, filePath: watchedBib, auxPath: '/phase6/main.aux', ownerPath: owner}
+            })
+            const existsStub = sinon.stub(lw.file, 'exists').callsFake(filePath => Promise.resolve(
+                filePath === missingInput ? false : {type: vscode.FileType.File, ctime: 0, mtime: 0, size: 0}
+            ))
+            const refreshStub = sinon.stub(instance, 'refreshCache').resolves()
+            const addSpy = sinon.spy(instance, 'add')
+
+            try {
+                await instance.loadFlsFile(owner)
+
+                sinon.assert.neverCalledWith(existsStub, excludedInput)
+                sinon.assert.calledOnceWithExactly(refreshStub, owner)
+                sinon.assert.notCalled(addSpy)
+                assert.strictEqual(instance.get(owner), undefined)
+                assert.notHasLog(`Found .bib ${watchedBib} from .aux /phase6/main.aux .`)
+            } finally {
+                discoverStub.restore()
+                existsStub.restore()
+                instance.dispose()
             }
         })
     })
@@ -855,11 +957,12 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.strictEqual(result, includedTeX)
             assert.strictEqual(filePath, rootPath)
             assert.strictEqual(forwardedSet, includedTeX)
+            assert.strictEqual(typeof includedStub.firstCall.args[1], 'function')
         })
     })
 
     describe('lw.cache bibliography query coordination', () => {
-        it('should dynamically resolve the root and forward the owning instance context', () => {
+        it('should dynamically resolve the root and forward inline cache lookups', () => {
             const firstRoot = set.root(fixture, 'main.tex')
             const bibStub = sinon.stub(bibliography, 'getIncludedBib').returns(['/bib.bib'])
             const glossaryStub = sinon.stub(bibliography, 'getIncludedGlossaryBib').returns(['/glossary.bib'])
@@ -873,8 +976,9 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 assert.strictEqual(bibStub.firstCall.args[0], firstRoot)
                 assert.strictEqual(glossaryStub.firstCall.args[0], secondRoot)
                 assert.strictEqual(bibStub.secondCall.args[0], '/explicit.tex')
-                assert.strictEqual(bibStub.firstCall.args[1], bibStub.secondCall.args[1])
-                assert.strictEqual(bibStub.firstCall.args[1], glossaryStub.firstCall.args[1])
+                assert.strictEqual(typeof bibStub.firstCall.args[1], 'function')
+                assert.strictEqual(typeof bibStub.secondCall.args[1], 'function')
+                assert.strictEqual(typeof glossaryStub.firstCall.args[1], 'function')
             } finally {
                 bibStub.restore()
                 glossaryStub.restore()

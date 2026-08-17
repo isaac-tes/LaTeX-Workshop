@@ -8,7 +8,7 @@ new repository facts conflict with the plan or require a behavioral decision.
 Behavior outside the decisions recorded here must not be changed without a new
 review.
 
-Current status: **Phase 5 complete; Phase 6 not started.**
+Current status: **Phase 6 complete; Phase 7 not started.**
 
 The migration must remain incremental and reversible. Structural moves, test
 moves, and behavior changes belong in separate commits whenever practical.
@@ -864,9 +864,9 @@ defect.
 
 **Rollback point:** The completed Phase 4 commit.
 
-### [ ] Phase 6: Return discoveries to `Cache`
+### [x] Phase 6: Return discoveries to `Cache`
 
-**Status:** Not started.
+**Status:** Complete on 2026-08-17.
 
 **Goal:** Establish the target one-way coordination flow:
 
@@ -875,30 +875,76 @@ cache module -> Cache -> store/dependencies/bibliography/auxiliaries
 ```
 
 **Files affected:** `src/core/cache.ts`, `cache/dependencies.ts`,
-`cache/bibliography.ts`, `cache/auxiliaries.ts`, and their tests.
+`cache/bibliography.ts`, `cache/auxiliaries.ts`, `src/core/file.ts`, and their
+tests.
 
 **Behavior policy:** Preserve externally visible behavior. Change only internal
 side-effect ownership.
 
 **Implementation notes:** Remove `DependencyContext`, `BibliographyContext`, and
-`AuxiliaryContext` completely and replace their side-effect callbacks with typed
-discovery results. `Cache` applies mutations, exclusions, watcher registration,
-and child scheduling. `getIncludedTeX` and bibliography graph queries may retain
-one standalone read-only cache lookup callback, which is not a side-effect
-context. Internal modules must not import each other or the production
-singleton. Re-evaluate the residual dynamic `lw.root.dir.path` search inside
-`lw.file.getBibPath` and, if necessary, pass an explicit owner root without
-changing bibliography search semantics accidentally.
+`AuxiliaryContext` completely. `discoverDependencies`, `discoverBibliography`,
+and `discoverFls` are ordered async generators returning typed discriminated
+events. `Cache` consumes each event immediately and is the sole owner of cache
+mutation, exclusions, watcher queries and registration, owner recovery, and
+recursive refresh scheduling. Incremental application deliberately preserves
+the current behavior in which earlier discoveries remain applied if a later
+read or resolution fails.
 
-**Required comments:** Explain discovery result ownership and why parent refresh
-does not await the full recursive graph.
+Dependency events use `input` and `external` variants, bibliography events use
+`bibtex` and `glossary` variants, and auxiliary events use `input` and
+`bibliography` variants. Discovery functions receive only the minimum readonly
+source values they need. Dependency discovery receives a snapshot of existing
+child paths and owns exact-path, first-occurrence de-duplication. FLS discovery
+filters INPUT/OUTPUT overlap, but `Cache` performs INPUT exclusion before the
+existence check so ignored paths retain the current short-circuit behavior. AUX
+OUTPUT existence checks remain part of discovery.
 
-**Tests to move/add:** Assert returned discoveries separately from the
-coordinator's application of them.
+Logs describing parsing, failed resolution, empty AUX bibliography data, and
+discovery completion remain in the internal modules. Logs describing applied
+children, external documents, bibliography entries, watchers, recovery, and
+refresh scheduling move to `Cache` without changing their text or order.
 
-**Coverage evidence:** Pending for all cache files.
+`getIncludedTeX` and bibliography graph queries retain one standalone read-only
+cache lookup callback, which is not a side-effect context. `Cache` passes an
+inline arrow lookup rather than storing another callback field. Internal
+modules must not import each other or the production singleton.
 
-**Verification commands:** Standard Node 20 verification suite.
+Change `lw.file.getBibPath` to require `(bib, rootDir, baseDir)`. It searches the
+fixed owner root first, then the declaring or reconstructed source directory,
+then configured `latex.bibDirs`; it no longer reads `lw.root.dir.path`.
+The fallback `kpsewhich` call uses the same explicit owner root as its working
+directory. This preserves the default compiler-working-directory and
+`chapterbib` behavior while preventing cache discovery from changing owner when
+the global root changes. Custom `latex.build.fromFolder` and per-tool working
+directories remain outside this phase.
+
+**Required comments:** Explain discovery result ownership, incremental event
+application, the FLS exclusion/existence ordering, fixed bibliography owner
+roots, and why parent refresh does not await the full recursive graph.
+
+**Tests to move/add:** Internal module tests assert returned discoveries,
+ordering, de-duplication, parsing I/O, and error termination. `cache.test.ts`
+asserts mutation, exclusion, watcher registration, owner recovery, recursive
+refresh scheduling, and applied-operation logs. Keep the five flat cache test
+files. Extend `file.test.ts` for the required three-argument bibliography API,
+root-before-base priority, removal of the global-root dependency, and explicit
+`kpsewhich` working directory.
+
+**Coverage evidence:** The final scoped c8 run reported statements **100%**,
+branches **100%**, functions **100%**, and lines **100%** separately for
+`src/core/cache.ts`, `src/core/cache/auxiliaries.ts`,
+`src/core/cache/bibliography.ts`, `src/core/cache/dependencies.ts`, and
+`src/core/cache/store.ts`. The aggregate row also reported 100% for all four
+metrics.
+
+**Verification evidence:** All commands ran with Node `v20.20.2`. Full-repository
+ESLint passed. Both `tsc -p tsconfig.json` and `tsc -p viewer/tsconfig.json`
+passed. The focused cache suite passed with **86 passing**, the focused file
+suite passed with **107 passing**, and the full suite and final scoped coverage
+run passed with **1095 passing**.
+
+**Verification commands:** Standard Node 20 verification suite, focused cache
+and file suites, full tests, and the scoped per-file c8 command.
 
 **Suggested commit boundary:** Internal side-effect ownership change only.
 

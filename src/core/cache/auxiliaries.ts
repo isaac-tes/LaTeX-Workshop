@@ -1,7 +1,6 @@
 import * as path from 'path'
 
 import { lw } from '../../lw'
-import type { FileCache } from '../../types'
 
 const logger = lw.log('Cacher')
 
@@ -14,13 +13,9 @@ export type AuxContent = {
     bibdata: string[][]
 }
 
-/** Instance-bound operations used by auxiliary discovery until Phase 6. */
-export type AuxiliaryContext = {
-    getCache: (filePath: string) => FileCache | undefined,
-    isExcluded: (filePath: string) => boolean,
-    watchSource: (filePath: string) => void,
-    refreshSource: (filePath: string, rootPath?: string) => Promise<void>
-}
+export type AuxiliaryDiscovery =
+    | { kind: 'input', filePath: string, flsPath: string, isTeX: boolean, ownerPath: string }
+    | { kind: 'bibliography', filePath: string, auxPath: string, ownerPath: string }
 
 /** Parses unique FLS inputs and outputs in their first-encounter order. */
 export function parseFlsContent(content: string, rootDir: string): FlsContent {
@@ -81,9 +76,9 @@ function getAuxSourceDir(outputFile: string, auxDir: string, rootDir: string): s
 
 /**
  * Resolves bibdata commands, resource names, and matched paths serially so
- * insertion, logging, watcher registration, and failures retain source order.
+ * yielded discoveries, logging, and failures retain source order.
  */
-async function loadAuxFile(filePath: string, srcDir: string, ownerPath: string, context: AuxiliaryContext): Promise<void> {
+async function* discoverAuxFile(filePath: string, srcDir: string, ownerPath: string): AsyncGenerator<AuxiliaryDiscovery> {
     const content = parseAuxContent((await lw.file.read(filePath)) ?? '')
     for (const bibs of content.bibdata) {
         if (bibs.length === 0) {
@@ -91,34 +86,20 @@ async function loadAuxFile(filePath: string, srcDir: string, ownerPath: string, 
             continue
         }
         for (const bib of bibs) {
-            const bibPaths = await lw.file.getBibPath(bib, srcDir)
+            const bibPaths = await lw.file.getBibPath(bib, path.dirname(ownerPath), srcDir)
             for (const bibPath of bibPaths) {
-                if (context.isExcluded(bibPath)) {
-                    continue
-                }
-                // AUX discoveries belong to the FLS owner captured by the
-                // caller, never to mutable global-root state during this scan.
-                const ownerCache = context.getCache(ownerPath)
-                if (!ownerCache?.bibfiles.has(bibPath)) {
-                    ownerCache?.bibfiles.add(bibPath)
-                    logger.log(`Found .bib ${bibPath} from .aux ${filePath} .`)
-                }
-                const bibUri = lw.file.toUri(bibPath)
-                if (!lw.watcher.bib.has(bibUri)) {
-                    lw.watcher.bib.add(bibUri)
-                }
+                yield {kind: 'bibliography', filePath: bibPath, auxPath: filePath, ownerPath}
             }
         }
     }
 }
 
 /**
- * Applies FLS inputs in source order before parsing AUX outputs. FLS-only TeX
- * children use MAX_VALUE so source-declared children retain precedence. Owner
- * recovery is awaited, while recursive child refresh stays fire-and-forget to
- * avoid cycles in the dependency graph.
+ * Discovers FLS inputs in source order before parsing AUX outputs. Cache applies
+ * each yielded event before requesting the next one, preserving partial
+ * progress and the input-before-output workflow when a later operation fails.
  */
-export async function loadFlsFile(filePath: string, context: AuxiliaryContext): Promise<void> {
+export async function* discoverFls(filePath: string): AsyncGenerator<AuxiliaryDiscovery> {
     const flsPath = await lw.file.getFlsPath(filePath)
     if (flsPath === undefined) {
         return
@@ -129,41 +110,22 @@ export async function loadFlsFile(filePath: string, context: AuxiliaryContext): 
     const ioFiles = parseFlsContent((await lw.file.read(flsPath)) ?? '', rootDir)
 
     for (const inputFile of ioFiles.input) {
-        const inputUri = lw.file.toUri(inputFile)
-        // OUTPUT overlap, ignore rules, and missing files are filtered before
-        // watcher ownership and extension-specific handling.
-        if (ioFiles.output.includes(inputFile) || context.isExcluded(inputFile) || !(await lw.file.exists(inputFile))) {
+        if (ioFiles.output.includes(inputFile)) {
             continue
         }
-        if (inputFile === filePath || lw.watcher.src.has(inputUri)) {
-            continue
-        }
-        if (path.extname(inputFile).toLowerCase() === '.tex') {
-            if (context.getCache(filePath) === undefined) {
-                logger.log(`Cache not finished on ${filePath} when parsing fls, try re-cache.`)
-                await context.refreshSource(filePath)
-            }
-            const fileCache = context.getCache(filePath)
-            if (fileCache !== undefined) {
-                fileCache.children.push({
-                    index: Number.MAX_VALUE,
-                    filePath: inputFile
-                })
-                context.watchSource(inputFile)
-                logger.log(`Found ${inputFile} from .fls ${flsPath} , caching.`)
-                void context.refreshSource(inputFile, filePath)
-            } else {
-                logger.log(`Cache not finished on ${filePath} when parsing fls.`)
-            }
-        } else {
-            context.watchSource(inputFile)
+        yield {
+            kind: 'input',
+            filePath: inputFile,
+            flsPath,
+            isTeX: path.extname(inputFile).toLowerCase() === '.tex',
+            ownerPath: filePath
         }
     }
 
     for (const outputFile of ioFiles.output) {
         if (path.extname(outputFile).toLowerCase() === '.aux' && (await lw.file.exists(outputFile))) {
             logger.log(`Found .aux ${outputFile} from .fls ${flsPath} , parsing.`)
-            await loadAuxFile(outputFile, getAuxSourceDir(outputFile, auxDir, rootDir), filePath, context)
+            yield* discoverAuxFile(outputFile, getAuxSourceDir(outputFile, auxDir, rootDir), filePath)
             logger.log(`Parsed .aux ${outputFile} .`)
         }
     }

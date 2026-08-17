@@ -451,21 +451,25 @@ const kpsecache: { [query: string]: string } = {}
  * @param {string} target - The LaTeX target to resolve, such as a file name.
  * @param {boolean} [isBib=false] - Indicates whether the target is a
  * bibliography file, default is false.
+ * @param {string} [cwd] - Optional working directory for this lookup.
  * @returns {string | undefined} The resolved path to the target, or `undefined`
  * if resolution fails.
  */
-function kpsewhich(target: string, isBib: boolean = false): string | undefined {
+function kpsewhich(target: string, isBib: boolean = false, cwd?: string): string | undefined {
     const query = (isBib ? '-format=.bib ' : '') + target
-    if (kpsecache[query]) {
-        logger.log(`kpsewhich cache hit on ${query}: ${kpsecache[query]} .`)
-        return kpsecache[query]
+    cwd ??= lw.root.dir.path || vscode.workspace.workspaceFolders?.[0].uri.path
+    // Relative kpsewhich results depend on cwd, so explicit cache owners must
+    // not reuse a result produced for a different project directory.
+    const cacheKey = `${cwd ?? ''}\0${query}`
+    if (kpsecache[cacheKey]) {
+        logger.log(`kpsewhich cache hit on ${query}: ${kpsecache[cacheKey]} .`)
+        return kpsecache[cacheKey]
     }
     const command = vscode.workspace.getConfiguration('latex-workshop').get('kpsewhich.path') as string
     logger.log(`Calling ${command} to resolve ${query} .`)
 
     try {
         const args = isBib ? ['-format=.bib', target] : [target]
-        const cwd = lw.root.dir.path || vscode.workspace.workspaceFolders?.[0].uri.path
         const kpsewhichReturn = lw.external.sync(command, args, { cwd })
         if (kpsewhichReturn.status === 0) {
             let output = kpsewhichReturn.stdout.toString().replace(/\r?\n/, '')
@@ -475,7 +479,7 @@ function kpsewhich(target: string, isBib: boolean = false): string | undefined {
                     output = path.resolve(cwd, output)
                     logger.log(`kpsewhich resolved to '${output}'.`)
                 }
-                kpsecache[query] = output
+                kpsecache[cacheKey] = output
             }
             return output
         }
@@ -489,13 +493,11 @@ function kpsewhich(target: string, isBib: boolean = false): string | undefined {
 
 /**
  * Resolves the file paths for a given bibliography file based on the base
- * directory and configuration settings.
+ * owner root, source base directory, and configuration settings.
  *
  * This function first retrieves the configuration 'latex.bibDirs' to obtain
  * directories specified for bibliography files. It combines these directories
- * with the provided base directory to form a list of directories to search for
- * the bibliography file. Additionally, if the root directory of the LaTeX
- * project is available, it is prepended to the search list. Depending on
+ * after the fixed owner root and source base directory. Depending on
  * whether the bibliography file name includes wildcards, the function either
  * resolves it using a file glob or directly searches for the file. If the file
  * cannot be resolved, the function optionally attempts to locate it using the
@@ -503,24 +505,22 @@ function kpsewhich(target: string, isBib: boolean = false): string | undefined {
  * Finally, the resolved bibliography file path(s) are returned.
  *
  * @param {string} bib - The name of the bibliography file to resolve.
+ * @param {string} rootDir - The fixed document owner and compiler working directory.
  * @param {string} baseDir - The base directory to start the search from.
  * @returns {string[]} An array containing the resolved file path(s) for the
  * bibliography file, or an empty array if the file could not be resolved.
  */
-async function getBibPath(bib: string, baseDir: string): Promise<string[]> {
+async function getBibPath(bib: string, rootDir: string, baseDir: string): Promise<string[]> {
     const configuration = vscode.workspace.getConfiguration('latex-workshop')
     const bibDirs = configuration.get('latex.bibDirs') as string[]
-    let searchDirs: string[] = [baseDir, ...bibDirs]
     // chapterbib requires to load the .bib file in every chapter using
     // the path relative to the rootDir
-    if (lw.root.dir.path) {
-        searchDirs = [lw.root.dir.path, ...searchDirs]
-    }
+    const searchDirs = [rootDir, baseDir, ...bibDirs]
     const bibPath = bib.includes('*') ? utils.resolveFileGlob(searchDirs, bib, '.bib') : await utils.resolveFile(searchDirs, bib, '.bib')
 
     if (bibPath === undefined || bibPath.length === 0) {
         if (configuration.get('kpsewhich.bibtex.enabled')) {
-            const kpsePath = kpsewhich(bib, true)
+            const kpsePath = kpsewhich(bib, true, rootDir)
             return kpsePath ? [kpsePath] : []
         } else {
             logger.log(`Cannot resolve bib path: ${bib} .`)

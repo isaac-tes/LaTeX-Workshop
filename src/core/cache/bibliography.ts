@@ -3,87 +3,71 @@ import * as path from 'path'
 import { lw } from '../../lw'
 import type { FileCache } from '../../types'
 
-const logger = lw.log('Cacher')
+export type CacheLookup = (filePath: string) => FileCache | undefined
 
-/** Instance-bound reads needed while bibliography discovery still applies side effects. */
-export type BibliographyContext = {
-    getCache: (filePath: string) => FileCache | undefined,
-    isExcluded: (filePath: string) => boolean
+export type BibliographyDiscovery = {
+    kind: 'bibtex' | 'glossary',
+    filePath: string
+}
+
+type BibliographySource = {
+    readonly filePath: string,
+    readonly contentTrimmed: string
 }
 
 /**
- * Discovers classic BibTeX resources before glossary resources. Both scans are
- * awaited serially because Set insertion, logging, watcher events, and failure
- * propagation are observable in source order.
+ * Discovers classic BibTeX resources before glossary resources. Results are
+ * yielded serially so Cache preserves application order and partial progress if
+ * a later path resolution fails.
  */
-export async function updateBibliography(fileCache: FileCache, context: BibliographyContext): Promise<void> {
-    await updateBibFiles(fileCache, context)
-    await updateGlossaryBibFiles(fileCache, context)
+export async function* discoverBibliography(source: BibliographySource, rootDir: string): AsyncGenerator<BibliographyDiscovery> {
+    yield* discoverBibFiles(source, rootDir)
+    yield* discoverGlossaryBibFiles(source, rootDir)
 }
 
 /** Scans `\bibliography`, `\addbibresource`, and bracket-form `\putbib` macros. */
-async function updateBibFiles(fileCache: FileCache, context: BibliographyContext): Promise<void> {
+async function* discoverBibFiles(source: BibliographySource, rootDir: string): AsyncGenerator<BibliographyDiscovery> {
     const bibReg =
         /(?:\\(?:bibliography|addbibresource)(?:\[[^[\]{}]*\])?){(?:\\subfix{)?([\s\S]+?)(?:\})?}|(?:\\putbib)\[(?:\\subfix{)?([\s\S]+?)(?:\})?\]/gm
 
     let result: RegExpExecArray | null
-    while ((result = bibReg.exec(fileCache.contentTrimmed)) !== null) {
+    while ((result = bibReg.exec(source.contentTrimmed)) !== null) {
         const bibs = (result[1] ? result[1] : result[2]).split(',').map(bib => bib.trim())
 
         for (const bib of bibs) {
-            const bibPaths = await lw.file.getBibPath(bib, path.dirname(fileCache.filePath))
+            const bibPaths = await lw.file.getBibPath(bib, rootDir, path.dirname(source.filePath))
             for (const bibPath of bibPaths) {
-                if (context.isExcluded(bibPath)) {
-                    continue
-                }
-                // Store before registering the watcher because Watcher.add may
-                // synchronously notify create handlers that read the cache.
-                fileCache.bibfiles.add(bibPath)
-                logger.log(`Bib ${bibPath} from ${fileCache.filePath} .`)
-                const bibUri = lw.file.toUri(bibPath)
-                if (!lw.watcher.bib.has(bibUri)) {
-                    lw.watcher.bib.add(bibUri)
-                }
+                yield {kind: 'bibtex', filePath: bibPath}
             }
         }
     }
 }
 
 /** Scans `\GlsXtrLoadResources` and `\glsbibdata` glossary resource macros. */
-async function updateGlossaryBibFiles(fileCache: FileCache, context: BibliographyContext): Promise<void> {
+async function* discoverGlossaryBibFiles(source: BibliographySource, rootDir: string): AsyncGenerator<BibliographyDiscovery> {
     const glossaryReg = /(?:\\GlsXtrLoadResources\s*\[.*?src=\{([^}]+)\}.*?\])|(?:\\glsbibdata(?:\[[^\]]*\])?\{([^}]*)\})/gs
 
     let result: RegExpExecArray | null
-    while ((result = glossaryReg.exec(fileCache.contentTrimmed)) !== null) {
+    while ((result = glossaryReg.exec(source.contentTrimmed)) !== null) {
         const bibs = (result[1] ? result[1] : result[2]).split(',').map(bib => bib.trim())
 
         for (const bib of bibs) {
-            const bibPaths = await lw.file.getBibPath(bib, path.dirname(fileCache.filePath))
+            const bibPaths = await lw.file.getBibPath(bib, rootDir, path.dirname(source.filePath))
             for (const bibPath of bibPaths) {
-                if (!bibPath || context.isExcluded(bibPath)) {
-                    continue
-                }
-                // Glossary resources have a separate owner Set and watcher from
-                // classic BibTeX resources, even when both resolve to one file.
-                fileCache.glossarybibfiles.add(bibPath)
-                logger.log(`Glossary bib ${bibPath} from ${fileCache.filePath} .`)
-                const bibUri = lw.file.toUri(bibPath)
-                if (!lw.watcher.glossary.has(bibUri)) {
-                    lw.watcher.glossary.add(bibUri)
-                }
+                yield {kind: 'glossary', filePath: bibPath}
             }
         }
     }
 }
 
 /** Returns bibliography resources from the cached TeX graph in first-encounter order. */
-export function getIncludedBib(filePath: string | undefined, context: BibliographyContext): string[] {
-    return getIncludedBibGeneric('bibtex', filePath, context)
+export function getIncludedBib(filePath: string | undefined, getCache: CacheLookup): string[] {
+    return getIncludedBibGeneric('bibtex', filePath, getCache)
 }
 
 /** Returns glossary resources from the cached TeX graph in first-encounter order. */
-export function getIncludedGlossaryBib(filePath: string | undefined, context: BibliographyContext): string[] {
-    return getIncludedBibGeneric('glossary', filePath, context)
+export function getIncludedGlossaryBib(filePath: string | undefined, getCache: CacheLookup): string[] {
+    return getIncludedBibGeneric('glossary', filePath, getCache)
 }
 
 /**
@@ -94,14 +78,14 @@ export function getIncludedGlossaryBib(filePath: string | undefined, context: Bi
 function getIncludedBibGeneric(
     bibType: 'bibtex' | 'glossary',
     filePath: string | undefined,
-    context: BibliographyContext,
+    getCache: CacheLookup,
     includedBib: string[] = [],
     checkedTeX: string[] = []
 ): string[] {
     if (filePath === undefined) {
         return []
     }
-    const fileCache = context.getCache(filePath)
+    const fileCache = getCache(filePath)
     if (fileCache === undefined) {
         return []
     }
@@ -115,7 +99,7 @@ function getIncludedBibGeneric(
         if (checkedTeX.includes(child.filePath)) {
             continue
         }
-        getIncludedBibGeneric(bibType, child.filePath, context, includedBib, checkedTeX)
+        getIncludedBibGeneric(bibType, child.filePath, getCache, includedBib, checkedTeX)
     }
     return Array.from(new Set(includedBib))
 }

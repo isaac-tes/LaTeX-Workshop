@@ -22,25 +22,6 @@ const logger = lw.log('Cacher')
  */
 export class Cache implements vscode.Disposable {
     private readonly store = new CacheStore()
-    private readonly dependencyContext: dependencies.DependencyContext = {
-        getCache: filePath => this.get(filePath),
-        watchSource: filePath => this.add(filePath),
-        refreshSource: (filePath, rootPath) => {
-            void this.refreshCache(filePath, rootPath)
-        }
-    }
-    private readonly bibliographyContext: bibliography.BibliographyContext = {
-        getCache: filePath => this.get(filePath),
-        isExcluded: filePath => this.isExcluded(filePath)
-    }
-    private readonly auxiliaryContext: auxiliaries.AuxiliaryContext = {
-        getCache: filePath => this.get(filePath),
-        isExcluded: filePath => this.isExcluded(filePath),
-        watchSource: filePath => this.add(filePath),
-        refreshSource: async (filePath, rootPath) => {
-            await this.refreshCache(filePath, rootPath)
-        }
-    }
     private readonly watcherSubscription: vscode.Disposable
     /** Coordinates the single outline reconstruction after current refreshes finish. */
     private cachingFilesCount = 0
@@ -281,7 +262,7 @@ export class Cache implements vscode.Disposable {
         // partial entry while child, AST, and completion parsing are still running.
         this.store.set(filePath, fileCache)
         const dependencyRoot = rootPath || lw.root.file.path || fileCache.filePath
-        await dependencies.updateDependencies(fileCache, dependencyRoot, this.dependencyContext)
+        await this.applyDependencyDiscoveries(fileCache, dependencyRoot)
 
         // Same-file refreshes currently run concurrently and replace this shared
         // map entry. Any task's finally handler may therefore clear a newer task;
@@ -289,7 +270,7 @@ export class Cache implements vscode.Disposable {
         this.promises.set(
             filePath,
             this.updateAST(fileCache)
-                .then(() => this.updateElements(fileCache))
+                .then(() => this.updateElements(fileCache, dependencyRoot))
                 .finally(() => {
                     lw.lint.label.check()
                     this.cachingFilesCount--
@@ -303,6 +284,44 @@ export class Cache implements vscode.Disposable {
         )
 
         return this.promises.get(filePath)
+    }
+
+    /**
+     * Applies dependency events as they are discovered so earlier mutations and
+     * watcher registrations remain visible if a later path resolution fails.
+     * Recursive refreshes are not awaited because circular TeX graphs would
+     * otherwise make parent and child refreshes wait on each other.
+     */
+    private async applyDependencyDiscoveries(fileCache: FileCache, rootPath: string): Promise<void> {
+        const source = {
+            filePath: fileCache.filePath,
+            contentTrimmed: fileCache.contentTrimmed,
+            childPaths: fileCache.children.map(child => child.filePath)
+        }
+        for await (const discovery of dependencies.discoverDependencies(source, rootPath)) {
+            if (discovery.kind === 'input') {
+                fileCache.children.push({index: discovery.index, filePath: discovery.filePath})
+                logger.log(`Input ${discovery.filePath} from ${fileCache.filePath} .`)
+            } else {
+                // XR metadata belongs to the root even when declared in a child.
+                // A missing owner suppresses only this mutation, not scheduling.
+                const ownerCache = this.get(discovery.ownerPath)
+                if (ownerCache !== undefined) {
+                    ownerCache.external[discovery.filePath] = discovery.prefix
+                    logger.log(
+                        `External document ${discovery.filePath} from ${fileCache.filePath} .` +
+                        (discovery.prefix ? ` Prefix is ${discovery.prefix}` : '')
+                    )
+                }
+            }
+
+            const uri = lw.file.toUri(discovery.filePath)
+            if (lw.watcher.src.has(uri)) {
+                continue
+            }
+            this.add(discovery.filePath)
+            void this.refreshCache(discovery.filePath, discovery.rootPath)
+        }
     }
 
     /**
@@ -375,7 +394,7 @@ export class Cache implements vscode.Disposable {
      * @param {FileCache} fileCache - The cache object containing the file data and
      * metadata to be updated.
      */
-    private async updateElements(fileCache: FileCache): Promise<void> {
+    private async updateElements(fileCache: FileCache, rootPath: string): Promise<void> {
         const start = performance.now()
         lw.completion.citation.parse(fileCache)
         // Package parsing must be before command and environment.
@@ -386,14 +405,89 @@ export class Cache implements vscode.Disposable {
         lw.completion.macro.parse(fileCache)
         lw.completion.subsuperscript.parse(fileCache)
         lw.completion.input.parseGraphicsPath(fileCache)
-        await bibliography.updateBibliography(fileCache, this.bibliographyContext)
+        await this.applyBibliographyDiscoveries(fileCache, path.dirname(rootPath))
         const elapsed = performance.now() - start
         logger.log(`Updated elements in ${elapsed.toFixed(2)} ms: ${fileCache.filePath} .`)
     }
 
-    /** Loads the owner's FLS/AUX discoveries and propagates workflow failures. */
+    /** Applies bibliography discoveries to their distinct Sets and watchers. */
+    private async applyBibliographyDiscoveries(fileCache: FileCache, rootDir: string): Promise<void> {
+        const source = {filePath: fileCache.filePath, contentTrimmed: fileCache.contentTrimmed}
+        for await (const discovery of bibliography.discoverBibliography(source, rootDir)) {
+            if ((discovery.kind === 'glossary' && !discovery.filePath) || this.isExcluded(discovery.filePath)) {
+                continue
+            }
+
+            if (discovery.kind === 'bibtex') {
+                // Store before registering the watcher because Watcher.add may
+                // synchronously notify create handlers that read the cache.
+                fileCache.bibfiles.add(discovery.filePath)
+                logger.log(`Bib ${discovery.filePath} from ${fileCache.filePath} .`)
+                const uri = lw.file.toUri(discovery.filePath)
+                if (!lw.watcher.bib.has(uri)) {
+                    lw.watcher.bib.add(uri)
+                }
+            } else {
+                fileCache.glossarybibfiles.add(discovery.filePath)
+                logger.log(`Glossary bib ${discovery.filePath} from ${fileCache.filePath} .`)
+                const uri = lw.file.toUri(discovery.filePath)
+                if (!lw.watcher.glossary.has(uri)) {
+                    lw.watcher.glossary.add(uri)
+                }
+            }
+        }
+    }
+
+    /**
+     * Applies FLS inputs before AUX bibliography events. Exclusion deliberately
+     * precedes the existence check to preserve the existing ignored-file
+     * short-circuit, while owner recovery is awaited before adding TeX children.
+     */
     async loadFlsFile(filePath: string): Promise<void> {
-        await auxiliaries.loadFlsFile(filePath, this.auxiliaryContext)
+        for await (const discovery of auxiliaries.discoverFls(filePath)) {
+            if (discovery.kind === 'input') {
+                if (this.isExcluded(discovery.filePath) || !(await lw.file.exists(discovery.filePath))) {
+                    continue
+                }
+                const uri = lw.file.toUri(discovery.filePath)
+                if (discovery.filePath === discovery.ownerPath || lw.watcher.src.has(uri)) {
+                    continue
+                }
+                if (!discovery.isTeX) {
+                    this.add(discovery.filePath)
+                    continue
+                }
+
+                if (this.get(discovery.ownerPath) === undefined) {
+                    logger.log(`Cache not finished on ${discovery.ownerPath} when parsing fls, try re-cache.`)
+                    await this.refreshCache(discovery.ownerPath)
+                }
+                const ownerCache = this.get(discovery.ownerPath)
+                if (ownerCache === undefined) {
+                    logger.log(`Cache not finished on ${discovery.ownerPath} when parsing fls.`)
+                    continue
+                }
+                ownerCache.children.push({index: Number.MAX_VALUE, filePath: discovery.filePath})
+                this.add(discovery.filePath)
+                logger.log(`Found ${discovery.filePath} from .fls ${discovery.flsPath} , caching.`)
+                // Child refresh remains fire-and-forget to avoid circular waits.
+                void this.refreshCache(discovery.filePath, discovery.ownerPath)
+                continue
+            }
+
+            if (this.isExcluded(discovery.filePath)) {
+                continue
+            }
+            const ownerCache = this.get(discovery.ownerPath)
+            if (ownerCache !== undefined && !ownerCache.bibfiles.has(discovery.filePath)) {
+                ownerCache.bibfiles.add(discovery.filePath)
+                logger.log(`Found .bib ${discovery.filePath} from .aux ${discovery.auxPath} .`)
+            }
+            const uri = lw.file.toUri(discovery.filePath)
+            if (!lw.watcher.bib.has(uri)) {
+                lw.watcher.bib.add(uri)
+            }
+        }
     }
 
     /**
@@ -406,7 +500,7 @@ export class Cache implements vscode.Disposable {
      * the specified file and its children.
      */
     getIncludedBib(filePath?: string): string[] {
-        return bibliography.getIncludedBib(filePath ?? lw.root.file.path, this.bibliographyContext)
+        return bibliography.getIncludedBib(filePath ?? lw.root.file.path, cachePath => this.get(cachePath))
     }
 
     /**
@@ -419,7 +513,7 @@ export class Cache implements vscode.Disposable {
      * the specified file and its children.
      */
     getIncludedGlossaryBib(filePath?: string): string[] {
-        return bibliography.getIncludedGlossaryBib(filePath ?? lw.root.file.path, this.bibliographyContext)
+        return bibliography.getIncludedGlossaryBib(filePath ?? lw.root.file.path, cachePath => this.get(cachePath))
     }
 
     /**
@@ -435,7 +529,7 @@ export class Cache implements vscode.Disposable {
      * @returns {string[]} - An array of paths to included TeX files.
      */
     getIncludedTeX(filePath?: string, includedTeX = new Set<string>()): Set<string> {
-        return dependencies.getIncludedTeX(filePath ?? lw.root.file.path, this.dependencyContext, includedTeX)
+        return dependencies.getIncludedTeX(filePath ?? lw.root.file.path, cachePath => this.get(cachePath), includedTeX)
     }
 
     /**
