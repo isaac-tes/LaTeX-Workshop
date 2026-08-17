@@ -457,27 +457,29 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         it('should run the kpsewhich fallback from the explicit owner root', async () => {
             set.root(fixture, 'main.tex')
             set.config('kpsewhich.bibtex.enabled', true)
+            const ownerRoot = path.resolve('/owner')
+            const sourceBase = path.resolve('/source')
             const resolveStub = sinon.stub(utils, 'resolveFile').resolves(undefined)
             const syncStub = sinon.stub(lw.external, 'sync').returns({
                 pid: 0,
                 status: 0,
-                stdout: 'phase6-explicit-owner.bib',
+                stdout: 'explicit-owner.bib',
                 output: [''],
                 stderr: '',
                 signal: 'SIGTERM'
             })
 
-            const result = await lw.file.getBibPath('phase6-explicit-owner', '/owner', '/source')
+            const result = await lw.file.getBibPath('explicit-owner', ownerRoot, sourceBase)
             resolveStub.restore()
             syncStub.restore()
 
             sinon.assert.calledOnceWithExactly(
                 syncStub,
                 sinon.match.string,
-                ['-format=.bib', 'phase6-explicit-owner'],
-                {cwd: '/owner'}
+                ['-format=.bib', 'explicit-owner'],
+                {cwd: ownerRoot}
             )
-            assert.deepStrictEqual(result, ['/owner/phase6-explicit-owner.bib'])
+            assert.deepStrictEqual(result, [path.resolve(ownerRoot, 'explicit-owner.bib')])
         })
     })
 

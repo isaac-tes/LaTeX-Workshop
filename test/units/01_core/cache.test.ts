@@ -15,6 +15,7 @@ type CacheInstance = InstanceType<typeof Cache>
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     const fixture = get.fixture(__filename)
+    const virtualPath = (...segments: string[]): string => path.resolve('/workspace', ...segments)
     // Drive the watcher's real dispatch path while exposing only the private hooks these characterization tests need.
     const sourceWatcherTestHooks = lw.watcher.src as unknown as {
         onDidChange: (event: 'create' | 'change', uri: vscode.Uri) => Promise<void>,
@@ -538,11 +539,12 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         it('should apply dependency discoveries through the owning instance', async () => {
             const texPath = get.path(fixture, 'main.tex')
             const instance = new Cache()
-            const childPath = '/phase6/child.tex'
-            const watchedPath = '/phase6/watched.tex'
-            const externalPath = '/phase6/external.tex'
-            const unprefixedPath = '/phase6/unprefixed.tex'
-            const missingOwnerPath = '/phase6/missing-owner.tex'
+            const childPath = virtualPath('dependency-child.tex')
+            const watchedPath = virtualPath('watched-dependency.tex')
+            const externalPath = virtualPath('external-document.tex')
+            const unprefixedPath = virtualPath('unprefixed-external-document.tex')
+            const missingOwnerPath = virtualPath('external-with-missing-owner.tex')
+            const uncachedOwnerPath = virtualPath('uncached-owner.tex')
             lw.watcher.src.add(vscode.Uri.file(watchedPath))
             const discoverStub = sinon.stub(dependencies, 'discoverDependencies').callsFake(async function* () {
                 await Promise.resolve()
@@ -566,7 +568,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                     kind: 'external' as const,
                     filePath: missingOwnerPath,
                     prefix: '',
-                    ownerPath: '/phase6/not-cached.tex',
+                    ownerPath: uncachedOwnerPath,
                     rootPath: missingOwnerPath
                 }
             })
@@ -616,7 +618,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         it('should apply bibliography discoveries through the owning instance', async () => {
             const texPath = get.path(fixture, 'main.tex')
             const bibPath = get.path(fixture, 'main.bib')
-            const excludedPath = '/phase6/excluded.bib'
+            const excludedPath = virtualPath('excluded.bib')
             const instance = new Cache()
             set.config('latex.watch.files.ignore', ['**/excluded.bib'])
             const discoverStub = sinon.stub(bibliography, 'discoverBibliography').callsFake(async function* () {
@@ -1380,21 +1382,23 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     describe('lw.cache auxiliary coordination', () => {
         it('should apply FLS discoveries and forward raw child queries', async () => {
             const owner = get.path(fixture, 'main.tex')
-            const child = '/phase6/fls-child.tex'
-            const sourceChild = '/phase6/source-child.tex'
-            const equivalentSourceChild = '/phase6/nested/../source-child.tex'
-            const input = '/phase6/generated.out'
+            const child = virtualPath('fls-child.tex')
+            const sourceChild = virtualPath('source-child.tex')
+            const equivalentSourceChild = `${virtualPath('nested')}${path.sep}..${path.sep}source-child.tex`
+            const input = virtualPath('generated.out')
+            const flsPath = virtualPath('main.fls')
+            const auxPath = virtualPath('main.aux')
             const bib = get.path(fixture, 'main.bib')
             set.config('latex.watch.files.ignore', [])
             await lw.cache.refreshCache(owner)
             lw.cache.get(owner)!.children.push({filePath: sourceChild, index: 3})
             const discoverStub = sinon.stub(auxiliaries, 'discoverFls').callsFake(async function* () {
                 await Promise.resolve()
-                yield {kind: 'input' as const, filePath: child, flsPath: '/phase6/main.fls', isTeX: true, ownerPath: owner}
-                yield {kind: 'input' as const, filePath: equivalentSourceChild, flsPath: '/phase6/main.fls', isTeX: true, ownerPath: owner}
-                yield {kind: 'input' as const, filePath: input, flsPath: '/phase6/main.fls', isTeX: false, ownerPath: owner}
-                yield {kind: 'bibliography' as const, filePath: bib, auxPath: '/phase6/main.aux', ownerPath: owner}
-                yield {kind: 'bibliography' as const, filePath: bib, auxPath: '/phase6/main.aux', ownerPath: owner}
+                yield {kind: 'input' as const, filePath: child, flsPath, isTeX: true, ownerPath: owner}
+                yield {kind: 'input' as const, filePath: equivalentSourceChild, flsPath, isTeX: true, ownerPath: owner}
+                yield {kind: 'input' as const, filePath: input, flsPath, isTeX: false, ownerPath: owner}
+                yield {kind: 'bibliography' as const, filePath: bib, auxPath, ownerPath: owner}
+                yield {kind: 'bibliography' as const, filePath: bib, auxPath, ownerPath: owner}
             })
             const childrenStub = sinon.stub(auxiliaries, 'getFlsChildren').resolves(['/child.tex'])
             const existsStub = sinon.stub(lw.file, 'exists').resolves({type: vscode.FileType.File, ctime: 0, mtime: 0, size: 0})
@@ -1426,12 +1430,14 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
 
         it('should preserve FLS filtering order and stop TeX application when owner recovery fails', async () => {
-            const owner = '/phase6/missing-owner.tex'
-            const excludedInput = '/phase6/excluded.tex'
-            const missingInput = '/phase6/missing.tex'
-            const watchedInput = '/phase6/watched.tex'
-            const child = '/phase6/child.tex'
-            const excludedBib = '/phase6/excluded.bib'
+            const owner = virtualPath('missing-owner.tex')
+            const excludedInput = virtualPath('excluded.tex')
+            const missingInput = virtualPath('missing.tex')
+            const watchedInput = virtualPath('watched.tex')
+            const child = virtualPath('child.tex')
+            const excludedBib = virtualPath('excluded.bib')
+            const flsPath = virtualPath('main.fls')
+            const auxPath = virtualPath('main.aux')
             const watchedBib = get.path(fixture, 'main.bib')
             const instance = new Cache()
             set.config('latex.watch.files.ignore', ['**/excluded.tex', '**/excluded.bib'])
@@ -1440,10 +1446,10 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const discoverStub = sinon.stub(auxiliaries, 'discoverFls').callsFake(async function* () {
                 await Promise.resolve()
                 for (const filePath of [excludedInput, missingInput, owner, watchedInput, child]) {
-                    yield {kind: 'input' as const, filePath, flsPath: '/phase6/main.fls', isTeX: true, ownerPath: owner}
+                    yield {kind: 'input' as const, filePath, flsPath, isTeX: true, ownerPath: owner}
                 }
-                yield {kind: 'bibliography' as const, filePath: excludedBib, auxPath: '/phase6/main.aux', ownerPath: owner}
-                yield {kind: 'bibliography' as const, filePath: watchedBib, auxPath: '/phase6/main.aux', ownerPath: owner}
+                yield {kind: 'bibliography' as const, filePath: excludedBib, auxPath, ownerPath: owner}
+                yield {kind: 'bibliography' as const, filePath: watchedBib, auxPath, ownerPath: owner}
             })
             const existsStub = sinon.stub(lw.file, 'exists').callsFake(filePath => Promise.resolve(
                 filePath === missingInput ? false : {type: vscode.FileType.File, ctime: 0, mtime: 0, size: 0}
@@ -1458,7 +1464,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 sinon.assert.calledOnceWithExactly(refreshStub, owner)
                 sinon.assert.notCalled(addSpy)
                 assert.strictEqual(instance.get(owner), undefined)
-                assert.notHasLog(`Found .bib ${watchedBib} from .aux /phase6/main.aux .`)
+                assert.notHasLog(`Found .bib ${watchedBib} from .aux ${auxPath} .`)
             } finally {
                 discoverStub.restore()
                 existsStub.restore()
