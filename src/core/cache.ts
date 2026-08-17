@@ -173,7 +173,7 @@ export class Cache implements vscode.Disposable {
      */
     async wait(filePath: string, seconds: number = 2): Promise<Promise<void> | undefined> {
         let waited = 0
-        while (this.promises.get(filePath) === undefined && this.get(filePath) === undefined) {
+        while (this.store.getInFlight(filePath) === undefined && this.get(filePath) === undefined) {
             // Just open vscode, has not cached, wait for a bit?
             await new Promise(resolve => setTimeout(resolve, 100))
             waited++
@@ -184,7 +184,7 @@ export class Cache implements vscode.Disposable {
                 break
             }
         }
-        return this.promises.get(filePath)
+        return this.store.getInFlight(filePath)
     }
 
     /**
@@ -267,14 +267,14 @@ export class Cache implements vscode.Disposable {
         // Same-file refreshes currently run concurrently and replace this shared
         // map entry. Any task's finally handler may therefore clear a newer task;
         // Phase 7 changes that behavior after the characterization baseline.
-        this.promises.set(
+        this.store.setInFlight(
             filePath,
             this.updateAST(fileCache)
                 .then(() => this.updateElements(fileCache, dependencyRoot))
                 .finally(() => {
                     lw.lint.label.check()
                     this.cachingFilesCount--
-                    this.promises.delete(filePath)
+                    this.store.deleteInFlight(filePath)
                     lw.event.fire(lw.event.FileParsed, filePath)
 
                     if (this.cachingFilesCount === 0) {
@@ -283,7 +283,7 @@ export class Cache implements vscode.Disposable {
                 })
         )
 
-        return this.promises.get(filePath)
+        return this.store.getInFlight(filePath)
     }
 
     /**

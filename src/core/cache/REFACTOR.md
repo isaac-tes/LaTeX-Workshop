@@ -985,6 +985,39 @@ semantic commit.
 **Rollback point:** The completed Phase 6 commit, plus each independently passing
 semantic commit.
 
+#### Phase 7.1: Path identity and refresh core
+
+This subphase contains three independently passing commits: cache-local path
+identity, per-path refresh coalescing, and atomic refresh/failure handling.
+
+- [x] Normalize cache-local path identity while preserving original paths for
+  public results and diagnostics. Completed on 2026-08-17. Cache and in-flight
+  storage now share one normalized identity; Windows drive paths use win32
+  normalization on every host and drive-letter case is canonicalized. The
+  focused cache suite passed with **88 passing**, and scoped per-file coverage
+  reported **100%** statements, branches, functions, and lines for every cache
+  file under Node `v20.20.2`.
+- [ ] Coalesce concurrent same-path refresh requests.
+- [ ] Commit refresh drafts atomically and handle failures at asynchronous
+  boundaries.
+
+#### Phase 7.2: Lifecycle and scheduling
+
+This subphase contains separate commits for generation-based invalidation and
+per-file aggressive-refresh debounce.
+
+- [ ] Invalidate stale work on reset, deletion, and disposal, and enforce the
+  disposed-instance contract.
+- [ ] Debounce aggressive refreshes independently per normalized file path.
+
+#### Phase 7.3: Dependency results and eligibility
+
+This subphase contains separate commits for dependency ordering/identity and
+the exact expl3 basename rule.
+
+- [ ] Preserve source dependency order and normalized first-occurrence identity.
+- [ ] Match the expl3 exclusion by exact basename.
+
 ### [ ] Phase 8: Clean up the public cache API
 
 **Status:** Not started.
