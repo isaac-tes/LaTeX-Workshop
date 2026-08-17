@@ -249,6 +249,28 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 second.dispose()
             }
         })
+
+        it('should permanently reject active operations and expose empty reads after disposal', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const instance = new Cache()
+            await instance.refreshCache(texPath)
+
+            instance.dispose()
+            instance.dispose()
+            instance.reset()
+
+            assert.strictEqual(instance.get(texPath), undefined)
+            assert.deepStrictEqual(instance.paths(), [])
+            assert.deepStrictEqual(instance.getIncludedBib(texPath), [])
+            assert.deepStrictEqual(instance.getIncludedGlossaryBib(texPath), [])
+            assert.deepStrictEqual([...instance.getIncludedTeX(texPath, new Set(['/old.tex']))], [])
+            assert.throws(() => instance.add(texPath), /Cache instance has been disposed/)
+            assert.throws(() => instance.refreshCacheAggressive(texPath), /Cache instance has been disposed/)
+            await assert.rejects(instance.refreshCache(texPath), /Cache instance has been disposed/)
+            await assert.rejects(instance.wait(texPath), /Cache instance has been disposed/)
+            await assert.rejects(instance.loadFlsFile(texPath), /Cache instance has been disposed/)
+            await assert.rejects(instance.getFlsChildren(texPath), /Cache instance has been disposed/)
+        })
     })
 
     describe('lw.cache.isExcluded', () => {
@@ -859,7 +881,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             }
         })
 
-        it('should still allow in-progress work to commit after reset before generation invalidation', async () => {
+        it('should invalidate in-progress work on reset without committing or emitting', async () => {
             const texPath = get.path(fixture, 'main.tex')
             const parseStub = lw.parser.parse.tex as sinon.SinonStub
             const eventStub = lw.event.fire as sinon.SinonStub
@@ -883,8 +905,8 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 pendingParse.resolve(undefined)
                 await refresh
 
-                assert.ok(lw.cache.get(texPath))
-                sinon.assert.calledWith(eventStub, lw.event.FileParsed, texPath)
+                assert.strictEqual(lw.cache.get(texPath), undefined)
+                sinon.assert.neverCalledWith(eventStub, lw.event.FileParsed, texPath)
             } finally {
                 pendingParse.resolve(undefined)
                 if (refresh) {
@@ -894,7 +916,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             }
         })
 
-        it('should still allow in-progress work to commit after deletion before path invalidation', async () => {
+        it('should invalidate active and queued work when the source is deleted', async () => {
             const texPath = get.path(fixture, 'main.tex')
             const uri = vscode.Uri.file(texPath)
             const parseStub = lw.parser.parse.tex as sinon.SinonStub
@@ -907,10 +929,12 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             lw.cache.add(texPath)
 
             let refresh: ReturnType<typeof lw.cache.refreshCache> | undefined
+            let queuedRefresh: ReturnType<typeof lw.cache.refreshCache> | undefined
             let existsStub: sinon.SinonStub | undefined
             try {
                 refresh = lw.cache.refreshCache(texPath)
                 await waitFor(() => parseStub.calledOnce)
+                queuedRefresh = lw.cache.refreshCache(texPath)
                 existsStub = sinon.stub(lw.file, 'exists').resolves(false)
 
                 await sourceWatcherTestHooks.onDidDelete(uri)
@@ -919,17 +943,184 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 assert.ok(lw.cache.promises.has(texPath))
 
                 pendingParse.resolve(undefined)
-                await refresh
+                await Promise.all([refresh, queuedRefresh])
 
-                assert.ok(lw.cache.get(texPath))
-                sinon.assert.calledWith(eventStub, lw.event.FileParsed, texPath)
+                sinon.assert.calledOnce(parseStub)
+                assert.strictEqual(lw.cache.get(texPath), undefined)
+                sinon.assert.neverCalledWith(eventStub, lw.event.FileParsed, texPath)
             } finally {
                 existsStub?.restore()
                 pendingParse.resolve(undefined)
-                if (refresh) {
-                    await Promise.allSettled([refresh])
+                if (refresh && queuedRefresh) {
+                    await Promise.allSettled([refresh, queuedRefresh])
                 }
                 parseStub.reset()
+            }
+        })
+
+        it('should run a post-reset request as a current rerun after stale work finishes', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const parseStub = lw.parser.parse.tex as sinon.SinonStub
+            const eventStub = lw.event.fire as sinon.SinonStub
+            const firstParse = deferred<any>()
+            const secondParse = deferred<any>()
+            parseStub.reset()
+            eventStub.resetHistory()
+            parseStub.onFirstCall().returns(firstParse.promise)
+            parseStub.onSecondCall().returns(secondParse.promise)
+
+            const staleRefresh = lw.cache.refreshCache(texPath)
+            await waitFor(() => parseStub.calledOnce)
+            lw.cache.reset()
+            const currentRefresh = lw.cache.refreshCache(texPath)
+            try {
+                firstParse.resolve(undefined)
+                await waitFor(() => parseStub.callCount === 2)
+                assert.strictEqual(lw.cache.get(texPath), undefined)
+
+                secondParse.resolve(undefined)
+                await Promise.all([staleRefresh, currentRefresh])
+
+                assert.ok(lw.cache.get(texPath))
+                sinon.assert.calledOnceWithExactly(eventStub, lw.event.FileParsed, texPath)
+            } finally {
+                firstParse.resolve(undefined)
+                secondParse.resolve(undefined)
+                await Promise.allSettled([staleRefresh, currentRefresh])
+                parseStub.reset()
+            }
+        })
+
+        it('should suppress an in-progress commit when its Cache is disposed', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const instance = new Cache()
+            const parseStub = lw.parser.parse.tex as sinon.SinonStub
+            const eventStub = lw.event.fire as sinon.SinonStub
+            const pendingParse = deferred<any>()
+            parseStub.reset()
+            eventStub.resetHistory()
+            parseStub.returns(pendingParse.promise)
+
+            const refresh = instance.refreshCache(texPath)
+            await waitFor(() => parseStub.calledOnce)
+            instance.dispose()
+            try {
+                pendingParse.resolve(undefined)
+                await refresh
+
+                assert.strictEqual(instance.get(texPath), undefined)
+                sinon.assert.neverCalledWith(eventStub, lw.event.FileParsed, texPath)
+            } finally {
+                pendingParse.resolve(undefined)
+                await Promise.allSettled([refresh])
+                parseStub.reset()
+                instance.dispose()
+            }
+        })
+
+        it('should stop stale work immediately after an invalidated read finishes', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const instance = new Cache()
+            const pendingRead = deferred<string | undefined>()
+            const readStub = sinon.stub(lw.file, 'read').returns(pendingRead.promise)
+            const refresh = instance.refreshCache(texPath)
+
+            try {
+                instance.reset()
+                pendingRead.resolve('% stale')
+                await refresh
+
+                assert.strictEqual(instance.get(texPath), undefined)
+            } finally {
+                pendingRead.resolve(undefined)
+                await Promise.allSettled([refresh])
+                readStub.restore()
+                instance.dispose()
+            }
+        })
+
+        it('should stop stale work within dependency discovery', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const instance = new Cache()
+            const childPath = '/stale/dependency.tex'
+            const addStub = sinon.stub(instance, 'add')
+            const discoverStub = sinon.stub(dependencies, 'discoverDependencies').callsFake(async function* () {
+                await Promise.resolve()
+                instance.reset()
+                yield {kind: 'input' as const, filePath: childPath, index: 1, rootPath: texPath}
+            })
+
+            try {
+                await instance.refreshCache(texPath)
+
+                sinon.assert.notCalled(addStub)
+                assert.strictEqual(instance.get(texPath), undefined)
+            } finally {
+                discoverStub.restore()
+                instance.dispose()
+            }
+        })
+
+        it('should stop stale work after dependency discovery completes', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const instance = new Cache()
+            const internals = instance as unknown as {
+                applyDependencyDiscoveries: () => Promise<unknown[]>
+            }
+            const dependencyStub = sinon.stub(internals, 'applyDependencyDiscoveries').callsFake(() => {
+                instance.reset()
+                return Promise.resolve([])
+            })
+
+            try {
+                await instance.refreshCache(texPath)
+                assert.strictEqual(instance.get(texPath), undefined)
+            } finally {
+                dependencyStub.restore()
+                instance.dispose()
+            }
+        })
+
+        it('should stop stale work within bibliography discovery', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const bibPath = get.path(fixture, 'main.bib')
+            const instance = new Cache()
+            const bibAddStub = sinon.spy(lw.watcher.bib, 'add')
+            const discoverStub = sinon.stub(bibliography, 'discoverBibliography').callsFake(async function* () {
+                await Promise.resolve()
+                instance.reset()
+                yield {kind: 'bibtex' as const, filePath: bibPath}
+            })
+
+            try {
+                await instance.refreshCache(texPath)
+
+                sinon.assert.notCalled(bibAddStub)
+                assert.strictEqual(instance.get(texPath), undefined)
+            } finally {
+                discoverStub.restore()
+                bibAddStub.restore()
+                instance.dispose()
+            }
+        })
+
+        it('should stop stale work after bibliography discovery completes', async () => {
+            const texPath = get.path(fixture, 'main.tex')
+            const instance = new Cache()
+            const internals = instance as unknown as {
+                applyBibliographyDiscoveries: () => Promise<void>
+            }
+            const bibliographyStub = sinon.stub(internals, 'applyBibliographyDiscoveries').callsFake(() => {
+                instance.reset()
+                return Promise.resolve()
+            })
+
+            try {
+                await instance.refreshCache(texPath)
+                assert.strictEqual(instance.get(texPath), undefined)
+            } finally {
+                bibliographyStub.restore()
+                instance.dispose()
             }
         })
     })

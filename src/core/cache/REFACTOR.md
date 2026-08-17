@@ -1019,8 +1019,14 @@ identity, per-path refresh coalescing, and atomic refresh/failure handling.
 This subphase contains separate commits for generation-based invalidation and
 per-file aggressive-refresh debounce.
 
-- [ ] Invalidate stale work on reset, deletion, and disposal, and enforce the
-  disposed-instance contract.
+- [x] Invalidate stale work on reset, deletion, and disposal, and enforce the
+  disposed-instance contract. Completed on 2026-08-17. Refresh requests carry
+  instance-generation and per-path revision snapshots, so stale reads,
+  discoveries, parsing, queued reruns, and commits stop without success events.
+  Disposed instances expose empty reads, reject active operations, and retain an
+  idempotent reset/dispose path. The cache suite passed with **106 passing**, and
+  scoped per-file coverage reported **100%** for all four metrics under Node
+  `v20.20.2`.
 - [ ] Debounce aggressive refreshes independently per normalized file path.
 
 #### Phase 7.3: Dependency results and eligibility

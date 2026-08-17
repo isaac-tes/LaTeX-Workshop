@@ -17,7 +17,9 @@ const logger = lw.log('Cacher')
 
 type RefreshRequest = {
     filePath: string,
-    rootPath?: string
+    rootPath: string | undefined,
+    generation: number,
+    revision: number
 }
 
 type RefreshStage = 'read' | 'dependencies' | 'ast' | 'completion' | 'bibliography' | 'commit'
@@ -37,13 +39,16 @@ export class Cache implements vscode.Disposable {
     private readonly store = new CacheStore()
     private readonly pendingRefreshes = new Map<string, RefreshRequest>()
     private readonly refreshDrafts = new Map<string, FileCache>()
+    private readonly pathRevisions = new Map<string, number>()
+    private generation = 0
     private readonly watcherSubscription: vscode.Disposable
     /** Coordinates the single outline reconstruction after current refreshes finish. */
     private cachingFilesCount = 0
     /** Records successful work until the last concurrent refresh queue settles. */
     private outlineDirty = false
     /** Preserves the current one-timer aggressive refresh debounce behavior. */
-    private updateCompleter!: NodeJS.Timeout
+    private updateCompleter: NodeJS.Timeout | undefined
+    private disposed = false
 
     constructor() {
         // Cache owns exactly the subscriptions that target this instance. This
@@ -76,8 +81,8 @@ export class Cache implements vscode.Disposable {
     /** Handles a source deletion delivered by this instance's watcher subscription. */
     private handleWatchedFileDelete(uri: vscode.Uri): void {
         const filePath = uri.fsPath
-        if (this.get(filePath) !== undefined) {
-            this.store.delete(filePath)
+        this.invalidatePath(filePath)
+        if (this.store.delete(filePath)) {
             logger.log(`Removed ${filePath} .`)
         }
     }
@@ -130,6 +135,7 @@ export class Cache implements vscode.Disposable {
      * @param {string} filePath - The path to the file to be added to the watcher.
      */
     add(filePath: string) {
+        this.assertActive()
         if (this.isExcluded(filePath)) {
             logger.log(`Ignored ${filePath} .`)
             return
@@ -154,6 +160,9 @@ export class Cache implements vscode.Disposable {
      * file path, or `undefined` if not found.
      */
     get(filePath: string): FileCache | undefined {
+        if (this.disposed) {
+            return undefined
+        }
         return this.store.get(filePath)
     }
 
@@ -168,6 +177,9 @@ export class Cache implements vscode.Disposable {
      * cached files.
      */
     paths(): string[] {
+        if (this.disposed) {
+            return []
+        }
         return this.store.paths()
     }
 
@@ -189,6 +201,7 @@ export class Cache implements vscode.Disposable {
      * is cached, or undefined if the cache is not refreshed.
      */
     async wait(filePath: string, seconds: number = 2): Promise<Promise<void> | undefined> {
+        this.assertActive()
         let waited = 0
         while (this.store.getInFlight(filePath) === undefined && this.get(filePath) === undefined) {
             // Just open vscode, has not cached, wait for a bit?
@@ -210,7 +223,10 @@ export class Cache implements vscode.Disposable {
      * remains reusable.
      */
     dispose(): void {
-        this.watcherSubscription.dispose()
+        if (!this.disposed) {
+            this.watcherSubscription.dispose()
+            this.disposed = true
+        }
         this.reset()
     }
 
@@ -223,6 +239,17 @@ export class Cache implements vscode.Disposable {
      * them from the cache, effectively clearing all stored file data.
      */
     reset() {
+        // Generation invalidation lets underlying I/O finish while preventing
+        // work started before reset from mutating the new logical cache state.
+        this.generation++
+        this.pathRevisions.clear()
+        this.pendingRefreshes.clear()
+        this.refreshDrafts.clear()
+        this.outlineDirty = false
+        if (this.updateCompleter !== undefined) {
+            clearTimeout(this.updateCompleter)
+            this.updateCompleter = undefined
+        }
         lw.watcher.src.reset()
         lw.watcher.bib.reset()
         lw.watcher.glossary.reset()
@@ -253,6 +280,7 @@ export class Cache implements vscode.Disposable {
      * is refreshed, or undefined if the file is excluded or cannot be cached.
      */
     async refreshCache(filePath: string, rootPath?: string): Promise<Promise<void> | undefined> {
+        this.assertActive()
         if (this.isExcluded(filePath)) {
             logger.log(`File is excluded from caching: ${filePath} .`)
             return
@@ -262,15 +290,21 @@ export class Cache implements vscode.Disposable {
             return
         }
         const cacheKey = CacheStore.normalizePath(filePath)
+        const request: RefreshRequest = {
+            filePath,
+            rootPath,
+            generation: this.generation,
+            revision: this.pathRevisions.get(cacheKey) ?? 0
+        }
         const activeTask = this.store.getInFlight(filePath)
         if (activeTask !== undefined) {
             // Only the latest pending request matters because every queued caller
             // waits for the same queue to become stable.
-            this.pendingRefreshes.set(cacheKey, {filePath, rootPath})
+            this.pendingRefreshes.set(cacheKey, request)
             return activeTask
         }
 
-        const task = this.runRefreshQueue(cacheKey, {filePath, rootPath})
+        const task = this.runRefreshQueue(cacheKey, request)
             .finally(() => {
                 this.pendingRefreshes.delete(cacheKey)
                 this.store.deleteInFlight(filePath)
@@ -291,7 +325,7 @@ export class Cache implements vscode.Disposable {
         try {
             while (request !== undefined) {
                 try {
-                    await this.refreshFile(request.filePath, request.rootPath)
+                    await this.refreshFile(request)
                 } catch (error) {
                     if (!this.pendingRefreshes.has(cacheKey)) {
                         throw error
@@ -316,13 +350,17 @@ export class Cache implements vscode.Disposable {
      * the same commit boundary, while watcher and child scheduling remain
      * discovery side effects.
      */
-    private async refreshFile(filePath: string, rootPath?: string): Promise<void> {
+    private async refreshFile(request: RefreshRequest): Promise<void> {
+        const {filePath, rootPath} = request
         logger.log(`Caching ${filePath} .`)
         let stage: RefreshStage = 'read'
         const cacheKey = CacheStore.normalizePath(filePath)
         try {
             const openEditor: vscode.TextDocument | undefined = vscode.workspace.textDocuments.find(document => document.fileName === path.normalize(filePath))
             const content = openEditor?.isDirty ? openEditor.getText() : (await lw.file.read(filePath)) ?? ''
+            if (!this.isCurrent(request)) {
+                return
+            }
             const fileCache: FileCache = {
                 filePath,
                 content,
@@ -337,13 +375,22 @@ export class Cache implements vscode.Disposable {
             const dependencyRoot = rootPath || lw.root.file.path || fileCache.filePath
 
             stage = 'dependencies'
-            const externalUpdates = await this.applyDependencyDiscoveries(fileCache, dependencyRoot)
+            const externalUpdates = await this.applyDependencyDiscoveries(fileCache, dependencyRoot, request)
+            if (!this.isCurrent(request)) {
+                return
+            }
             stage = 'ast'
             await this.updateAST(fileCache)
+            if (!this.isCurrent(request)) {
+                return
+            }
             stage = 'completion'
             await this.updateElements(fileCache)
             stage = 'bibliography'
-            await this.applyBibliographyDiscoveries(fileCache, path.dirname(dependencyRoot))
+            await this.applyBibliographyDiscoveries(fileCache, path.dirname(dependencyRoot), request)
+            if (!this.isCurrent(request)) {
+                return
+            }
             stage = 'commit'
             this.store.set(filePath, fileCache)
             for (const update of externalUpdates) {
@@ -373,7 +420,11 @@ export class Cache implements vscode.Disposable {
      * Recursive refreshes are not awaited because circular TeX graphs would
      * otherwise make parent and child refreshes wait on each other.
      */
-    private async applyDependencyDiscoveries(fileCache: FileCache, rootPath: string): Promise<ExternalUpdate[]> {
+    private async applyDependencyDiscoveries(
+        fileCache: FileCache,
+        rootPath: string,
+        request: RefreshRequest
+    ): Promise<ExternalUpdate[]> {
         const externalUpdates: ExternalUpdate[] = []
         const source = {
             filePath: fileCache.filePath,
@@ -381,6 +432,9 @@ export class Cache implements vscode.Disposable {
             childPaths: fileCache.children.map(child => child.filePath)
         }
         for await (const discovery of dependencies.discoverDependencies(source, rootPath)) {
+            if (!this.isCurrent(request)) {
+                break
+            }
             if (discovery.kind === 'input') {
                 fileCache.children.push({index: discovery.index, filePath: discovery.filePath})
                 logger.log(`Input ${discovery.filePath} from ${fileCache.filePath} .`)
@@ -408,6 +462,25 @@ export class Cache implements vscode.Disposable {
         return this.refreshDrafts.get(CacheStore.normalizePath(filePath)) ?? this.get(filePath)
     }
 
+    private isCurrent(request: RefreshRequest): boolean {
+        const cacheKey = CacheStore.normalizePath(request.filePath)
+        return !this.disposed && request.generation === this.generation &&
+            request.revision === (this.pathRevisions.get(cacheKey) ?? 0)
+    }
+
+    private invalidatePath(filePath: string): void {
+        const cacheKey = CacheStore.normalizePath(filePath)
+        this.pathRevisions.set(cacheKey, (this.pathRevisions.get(cacheKey) ?? 0) + 1)
+        this.pendingRefreshes.delete(cacheKey)
+        this.refreshDrafts.delete(cacheKey)
+    }
+
+    private assertActive(): void {
+        if (this.disposed) {
+            throw new Error('Cache instance has been disposed.')
+        }
+    }
+
     /** Prevents detached application work from becoming an unhandled rejection. */
     private runDetached(operation: Promise<unknown> | undefined, description: string): void {
         void Promise.resolve(operation).catch(error => logger.log(`Failed ${description}: ${String(error)}`))
@@ -431,6 +504,7 @@ export class Cache implements vscode.Disposable {
      * cache aggressively.
      */
     refreshCacheAggressive(filePath: string) {
+        this.assertActive()
         if (this.get(filePath) === undefined) {
             return
         }
@@ -499,9 +573,16 @@ export class Cache implements vscode.Disposable {
     }
 
     /** Applies bibliography discoveries to their distinct Sets and watchers. */
-    private async applyBibliographyDiscoveries(fileCache: FileCache, rootDir: string): Promise<void> {
+    private async applyBibliographyDiscoveries(
+        fileCache: FileCache,
+        rootDir: string,
+        request: RefreshRequest
+    ): Promise<void> {
         const source = {filePath: fileCache.filePath, contentTrimmed: fileCache.contentTrimmed}
         for await (const discovery of bibliography.discoverBibliography(source, rootDir)) {
+            if (!this.isCurrent(request)) {
+                break
+            }
             if ((discovery.kind === 'glossary' && !discovery.filePath) || this.isExcluded(discovery.filePath)) {
                 continue
             }
@@ -532,6 +613,7 @@ export class Cache implements vscode.Disposable {
      * short-circuit, while owner recovery is awaited before adding TeX children.
      */
     async loadFlsFile(filePath: string): Promise<void> {
+        this.assertActive()
         for await (const discovery of auxiliaries.discoverFls(filePath)) {
             if (discovery.kind === 'input') {
                 if (this.isExcluded(discovery.filePath) || !(await lw.file.exists(discovery.filePath))) {
@@ -591,6 +673,9 @@ export class Cache implements vscode.Disposable {
      * the specified file and its children.
      */
     getIncludedBib(filePath?: string): string[] {
+        if (this.disposed) {
+            return []
+        }
         return bibliography.getIncludedBib(filePath ?? lw.root.file.path, cachePath => this.get(cachePath))
     }
 
@@ -604,6 +689,9 @@ export class Cache implements vscode.Disposable {
      * the specified file and its children.
      */
     getIncludedGlossaryBib(filePath?: string): string[] {
+        if (this.disposed) {
+            return []
+        }
         return bibliography.getIncludedGlossaryBib(filePath ?? lw.root.file.path, cachePath => this.get(cachePath))
     }
 
@@ -620,6 +708,9 @@ export class Cache implements vscode.Disposable {
      * @returns {string[]} - An array of paths to included TeX files.
      */
     getIncludedTeX(filePath?: string, includedTeX = new Set<string>()): Set<string> {
+        if (this.disposed) {
+            return new Set()
+        }
         return dependencies.getIncludedTeX(filePath ?? lw.root.file.path, cachePath => this.get(cachePath), includedTeX)
     }
 
@@ -637,6 +728,7 @@ export class Cache implements vscode.Disposable {
      * file dependencies of the TeX file.
      */
     async getFlsChildren(texFile: string): Promise<string[]> {
+        this.assertActive()
         return auxiliaries.getFlsChildren(texFile)
     }
 }
