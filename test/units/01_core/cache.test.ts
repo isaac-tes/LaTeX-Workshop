@@ -726,9 +726,9 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             {
                 stage: 'completion',
                 fail: (instance: CacheInstance) => sinon.stub(
-                    instance as unknown as {updateElements: () => Promise<void>},
+                    instance as unknown as {updateElements: () => void},
                     'updateElements'
-                ).rejects(new Error('stage failure'))
+                ).throws(new Error('stage failure'))
             },
             {
                 stage: 'bibliography',
