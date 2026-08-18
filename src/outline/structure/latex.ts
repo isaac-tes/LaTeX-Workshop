@@ -7,7 +7,7 @@ import { resolveFile } from '../../utils/utils'
 import { InputFileRegExp, sanitizeInputFilePath } from '../../utils/inputfilepath'
 
 
-import { argContentToStr } from '../../utils/parser'
+import { argContentToStr, sanitizeLabel } from '../../utils/parser'
 
 const logger = lw.log('Structure', 'LaTeX')
 
@@ -87,7 +87,7 @@ async function constructFile(filePath: string, config: StructureConfig, structs:
 function chooseCaption(...args: (Ast.Argument | undefined)[]): string {
     for (const arg of args) {
         if ((arg?.content?.length ?? 0) > 0) {
-            return argContentToStr(arg?.content ?? [])
+            return sanitizeLabel(arg?.content ?? [])
         }
     }
     return ''
@@ -135,7 +135,7 @@ async function parseNode(
             }
         }
     } else if (node.type === 'macro' && config.macros.cmds.includes(node.content)) {
-        const argStr = argContentToStr(node.args?.[2]?.content || [])
+        const argStr = sanitizeLabel(node.args?.[2]?.content || [])
         element = {
             type: TeXElementType.Macro,
             name: node.content,
