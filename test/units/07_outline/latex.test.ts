@@ -450,8 +450,32 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
 			assert.strictEqual(result[0].label, '1 Title with line break')
 			assert.strictEqual(result[1].label, '2 Title with pdf switch')
-			assert.strictEqual(result[2].label, '3 Title with \\textit{macros}')
+			assert.strictEqual(result[2].label, '3 Title with macros')
 			assert.strictEqual(result[3].label, '4 Short')
+		})
+
+		it('should sanitise formatting, citations, and common math symbols in labels', async () => {
+			set.config('view.outline.numbers.enabled', false)
+			set.config('view.outline.floats.enabled', true)
+			set.config('view.outline.floats.caption.enabled', true)
+			set.config('view.outline.floats.number.enabled', false)
+			const main = set.root('main.tex')
+			await cacheAst(main, [
+				'\\documentclass{article}',
+				'\\begin{document}',
+				'\\section{\\textbf{Important:} \\textit{Physics} Overview}',
+				'\\subsection{$\\alpha, \\beta, \\text{and }\\gamma$ Radiation \\cite{sampleKey}}',
+				'\\begin{figure}',
+				'\\caption{\\textit{Flux} $\\pm$ \\cite{plotKey}}',
+				'\\end{figure}',
+				'\\end{document}'
+			].join('\n'))
+
+			const result = await construct(main, true)
+
+			assert.strictEqual(result[0].label, 'Important: Physics Overview')
+			assert.strictEqual(result[0].children[0].label, 'α, β, and γ Radiation')
+			assert.strictEqual(result[0].children[0].children[0].label, 'Figure: Flux ±')
 		})
 
 		it('should respect custom sections from view.outline.sections', async () => {
@@ -517,13 +541,13 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 				'\\begin{document}',
 				'\\section{Section 1}',
 				'\\label{no-show}',
-				'\\note{A note}',
+				'\\note{\\textbf{A note} $\\times$ \\cite{sampleKey}}',
 				'\\end{document}'
 			].join('\n'))
 
 			const result = await construct(main, true)
 
-			assert.strictEqual(result[0].children[0].label, '#note: A note')
+			assert.strictEqual(result[0].children[0].label, '#note: A note ×')
 		})
 
 		it('should build frame environments and respect float numbering toggle', async () => {
