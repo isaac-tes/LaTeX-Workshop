@@ -81,15 +81,15 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
 
         it('should correctly parse arguments of `subfile`', async () => {
-            await hasArgs('\\SweaveInput{file}', 's')
+            await hasArgs('\\subfile{file}', 's')
         })
 
         it('should correctly parse arguments of `loadglsentries`', async () => {
-            await hasArgs('\\SweaveInput{file}', 's')
+            await hasArgs('\\loadglsentries{file}', 's')
         })
 
         it('should correctly parse arguments of `markdownInput`', async () => {
-            await hasArgs('\\SweaveInput{file}', 's')
+            await hasArgs('\\markdownInput{file}', 's')
         })
 
         it('should correctly parse arguments of `import`', async () => {
@@ -97,23 +97,23 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
 
         it('should correctly parse arguments of `inputfrom`', async () => {
-            await hasArgs('\\import{folder}{file}', 'ss')
+            await hasArgs('\\inputfrom{folder}{file}', 'ss')
         })
 
         it('should correctly parse arguments of `includefrom`', async () => {
-            await hasArgs('\\import{folder}{file}', 'ss')
+            await hasArgs('\\includefrom{folder}{file}', 'ss')
         })
 
         it('should correctly parse arguments of `subimport`', async () => {
-            await hasArgs('\\import{folder}{file}', 'ss')
+            await hasArgs('\\subimport{folder}{file}', 'ss')
         })
 
         it('should correctly parse arguments of `subinputfrom`', async () => {
-            await hasArgs('\\import{folder}{file}', 'ss')
+            await hasArgs('\\subinputfrom{folder}{file}', 'ss')
         })
 
         it('should correctly parse arguments of `subincludefrom`', async () => {
-            await hasArgs('\\import{folder}{file}', 'ss')
+            await hasArgs('\\subincludefrom{folder}{file}', 'ss')
         })
 
         it('should correctly parse arguments of `linelabel`', async () => {
