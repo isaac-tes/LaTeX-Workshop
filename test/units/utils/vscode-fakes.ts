@@ -83,12 +83,37 @@ export class TextDocument implements vscode.TextDocument {
     }
 
     /**
-     * Document operations not needed by the current unit suite are intentionally unsupported.
+     * Converts a document position to a content offset using the fake
+     * document's newline-separated content.
+     * Use this when applying or inspecting range-based edits in a fake document.
+     */
+    offsetAt(position: vscode.Position): number {
+        return this.lines.slice(0, position.line).reduce((offset, line) => offset + line.length + 1, 0) + position.character
+    }
+
+    /**
+     * Converts a content offset to a document position using the fake
+     * document's newline-separated content.
+     * Use this when translating a workspace edit into content positions.
+     */
+    positionAt(offset: number): vscode.Position {
+        const before = this.content.slice(0, offset).split('\n')
+        return new vscode.Position(before.length - 1, before.at(-1)?.length ?? 0)
+    }
+
+    /**
+     * Returns either the complete document text or the text covered by a range.
+     * Use this when code under test reads a workspace edit's source range.
+     */
+    getText(range?: vscode.Range): string {
+        return range ? this.content.slice(this.offsetAt(range.start), this.offsetAt(range.end)) : this.content
+    }
+
+    /**
+     * Document operations not needed by the current unit suite are intentionally unsupported;
+     * these stubs remain to satisfy the `vscode.TextDocument` interface.
      */
     save(): Thenable<boolean> { throw new Error('Not implemented.') }
-    offsetAt(_: vscode.Position): number { throw new Error('Not implemented.') }
-    positionAt(_: number): vscode.Position { throw new Error('Not implemented.') }
-    getText(_?: vscode.Range): string { return this.content }
     getWordRangeAtPosition(_p: vscode.Position, _r?: RegExp): vscode.Range | undefined { throw new Error('Not implemented.') }
     validateRange(_: vscode.Range): vscode.Range { throw new Error('Not implemented.') }
     validatePosition(_: vscode.Position): vscode.Position { throw new Error('Not implemented.') }

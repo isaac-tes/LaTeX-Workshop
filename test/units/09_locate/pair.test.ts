@@ -5,21 +5,6 @@ import { lw } from '../../../src/lw'
 import { pair } from '../../../src/locate/pair'
 import { assert, get, mock, TextDocument } from '../utils'
 
-class PairDocument extends TextDocument {
-    override getText(range?: vscode.Range): string {
-        return range ? this.content.slice(this.offsetAt(range.start), this.offsetAt(range.end)) : this.content
-    }
-
-    override offsetAt(position: vscode.Position): number {
-        return this.lines.slice(0, position.line).reduce((offset, line) => offset + line.length + 1, 0) + position.character
-    }
-
-    override positionAt(offset: number): vscode.Position {
-        const before = this.content.slice(0, offset).split('\n')
-        return new vscode.Position(before.length - 1, before.at(-1)?.length ?? 0)
-    }
-}
-
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     const texPath = get.path('main.tex')
     let sandbox: sinon.SinonSandbox
@@ -41,7 +26,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     })
 
     function document(content: string, languageId = 'latex') {
-        return new PairDocument(texPath, content, { languageId })
+        return new TextDocument(texPath, content, { languageId })
     }
 
     function activate(content: string, position: vscode.Position, languageId = 'latex') {
@@ -61,10 +46,10 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             })
         } as unknown as vscode.TextEditor
         sandbox.stub(vscode.window, 'activeTextEditor').value(editor)
-        return { editor, insert, replace }
+        return { editor, document: testDocument, insert, replace }
     }
 
-    function acceptWorkspaceEdit(testDocument?: PairDocument, success = true) {
+    function acceptWorkspaceEdit(testDocument?: TextDocument, success = true) {
         return sandbox.stub(vscode.workspace, 'applyEdit').callsFake(edit => {
             if (success && testDocument) {
                 const edits = edit.entries().flatMap(([, items]) => items).map(item => ({
@@ -307,8 +292,8 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
 
         it('should toggle display math to an equation environment', async () => {
-            const { editor } = activate('\\[x\\]', new vscode.Position(0, 2))
-            acceptWorkspaceEdit(editor.document as PairDocument)
+            const { editor, document: testDocument } = activate('\\[x\\]', new vscode.Position(0, 2))
+            acceptWorkspaceEdit(testDocument)
 
             await pair.name('equationToggle')
             await settle()
@@ -318,8 +303,8 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
 
         it('should toggle an equation environment to display math', async () => {
-            const { editor } = activate('\\begin{equation*}\nx\n\\end{equation*}', new vscode.Position(1, 0))
-            acceptWorkspaceEdit(editor.document as PairDocument)
+            const { editor, document: testDocument } = activate('\\begin{equation*}\nx\n\\end{equation*}', new vscode.Position(1, 0))
+            acceptWorkspaceEdit(testDocument)
 
             await pair.name('equationToggle')
             await settle()
