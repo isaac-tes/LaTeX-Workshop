@@ -26,7 +26,7 @@ async function lintRootFile(rootPath: string) {
         return
     }
 
-    parseLog(stdout)
+    await parseLog(stdout)
 }
 
 async function lintFile(document: vscode.TextDocument) {
@@ -38,7 +38,7 @@ async function lintFile(document: vscode.TextDocument) {
         return
     }
 
-    parseLog(stdout, document.fileName)
+    await parseLog(stdout, document.fileName)
 }
 
 async function lacheckWrapper(linterid: string, configScope: vscode.ConfigurationScope, filePath: string, content?: string): Promise<string | undefined> {
@@ -100,7 +100,7 @@ function parseLog(log: string, filePath?: string) {
     }
     logger.log(`Logged ${linterLog.length} messages.`)
     laCheck.linterDiagnostics.clear()
-    void showLinterDiagnostics(linterLog)
+    return showLinterDiagnostics(linterLog)
 }
 
 async function showLinterDiagnostics(linterLog: LaCheckLogEntry[]) {

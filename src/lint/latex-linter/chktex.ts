@@ -171,7 +171,7 @@ async function getChktexrcTabSize(file: string): Promise<number | undefined> {
 }
 
 function parseLog(log: string, singleFileOriginalPath?: string) {
-    void parseChktexLog(log, singleFileOriginalPath)
+    return parseChktexLog(log, singleFileOriginalPath)
 }
 
 async function parseChktexLog(log: string, singleFileOriginalPath?: string, tabSizeArg?: number) {

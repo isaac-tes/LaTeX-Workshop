@@ -7,7 +7,7 @@ import { Recipe } from '../../../src/compile/recipe'
 import type { PlanResult, StepResult, Tool } from '../../../src/compile/types'
 import { lw } from '../../../src/lw'
 import * as pick from '../../../src/utils/quick-pick'
-import { assert, deferred, flushImmediate, get, mock, set, sleep, waitFor } from '../utils'
+import { assert, deferred, get, mock, set, sleep, waitFor } from '../utils'
 
 const rootFile = get.path('main.tex')
 const subfile = get.path('sub', 'main.tex')
@@ -663,7 +663,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             await waitFor(() => executor.activePlan?.name === 'A', {interval: 0})
             const pending = executor.run({recipeName: 'B', isAuto: false, isBibChanged: false})
             active.resolve(planResult(plans.find(plan => plan.name === 'A')!))
-            await flushImmediate()
+            await active.promise
             assert.strictEqual(ownerSettled, false)
             assert.deepStrictEqual(order, ['A'])
 

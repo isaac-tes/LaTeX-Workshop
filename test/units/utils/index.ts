@@ -4,7 +4,7 @@ import { resetCache, resetRoot, setRoot } from './state'
 import { getCompilerLog, log, resetLog } from './logging'
 
 export { assert } from './assertions'
-export { collectAsync, deferred, flushImmediate, sleep, waitFor } from './async'
+export { collectAsync, deferred, sleep, waitFor } from './async'
 export type { Deferred, WaitForOptions } from './async'
 export { mock } from './mocks'
 export { TextDocument, TextEditor } from './vscode-fakes'

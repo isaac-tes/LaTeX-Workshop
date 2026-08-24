@@ -73,7 +73,7 @@ export interface LaTeXLinter {
     getName(): string,
     lintRootFile(rootPath: string): Promise<void>,
     lintFile(document: vscode.TextDocument): Promise<void>,
-    parseLog(log: string, filePath?: string): void
+    parseLog(log: string, filePath?: string): Promise<void>
 }
 
 export interface LaTeXFormatter {

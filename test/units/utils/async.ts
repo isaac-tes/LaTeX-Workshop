@@ -33,15 +33,6 @@ export async function collectAsync<T>(source: AsyncIterable<T>): Promise<T[]> {
 }
 
 /**
- * Yields to the next Node.js immediate callback.
- * Use it after triggering code backed by `setImmediate`; it is not a wait for
- * a real external event and should not replace an event-specific promise.
- */
-export function flushImmediate(): Promise<void> {
-    return new Promise(resolve => setImmediate(resolve))
-}
-
-/**
  * Gives pending asynchronous work one event-loop turn to progress.
  * This is an implementation detail of `waitFor`, not a signal that the code
  * under test is specifically scheduled with `setImmediate`.

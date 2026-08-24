@@ -3,7 +3,7 @@ import * as vscode from 'vscode'
 import * as sinon from 'sinon'
 import { lw } from '../../../src/lw'
 import { pair } from '../../../src/locate/pair'
-import { assert, flushImmediate, get, mock, TextDocument } from '../utils'
+import { assert, deferred, get, mock, TextDocument } from '../utils'
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     const texPath = get.path('main.tex')
@@ -49,8 +49,9 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         return { editor, document: testDocument, insert, replace }
     }
 
-    function acceptWorkspaceEdit(testDocument?: TextDocument, success = true) {
-        return sandbox.stub(vscode.workspace, 'applyEdit').callsFake(edit => {
+    function acceptWorkspaceEdit(testDocument?: TextDocument, success = true): Promise<boolean> {
+        const applied = deferred<boolean>()
+        sandbox.stub(vscode.workspace, 'applyEdit').callsFake(edit => {
             if (success && testDocument) {
                 const edits = edit.entries().flatMap(([, items]) => items).map(item => ({
                     start: testDocument.offsetAt(item.range.start),
@@ -61,8 +62,15 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                     testDocument.setContent(testDocument.content.slice(0, item.start) + item.text + testDocument.content.slice(item.end))
                 }
             }
-            return Promise.resolve(success)
+            return {
+                then: (onFulfilled: (value: boolean) => unknown) => {
+                    const result = onFulfilled(success)
+                    applied.resolve(true)
+                    return Promise.resolve(result)
+                }
+            } as unknown as Promise<boolean>
         })
+        return applied.promise
     }
 
     describe('build', () => {
@@ -263,10 +271,10 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     describe('name', () => {
         it('should select both environment names', async () => {
             const { editor } = activate('\\begin{center}\nx\n\\end{center}', new vscode.Position(1, 0))
-            acceptWorkspaceEdit()
+            const applied = acceptWorkspaceEdit()
 
             await pair.name('selection')
-            await flushImmediate()
+            await applied
 
             assert.deepStrictEqual(editor.selections, [
                 new vscode.Selection(0, 7, 0, 13),
@@ -276,10 +284,10 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
         it('should add cursors at both environment names', async () => {
             const { editor } = activate('\\begin{center}\nx\n\\end{center}', new vscode.Position(1, 0))
-            acceptWorkspaceEdit()
+            const applied = acceptWorkspaceEdit()
 
             await pair.name('cursor')
-            await flushImmediate()
+            await applied
 
             assert.deepStrictEqual(editor.selections, [
                 new vscode.Selection(0, 7, 0, 7),
@@ -289,10 +297,10 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
         it('should toggle display math to an equation environment', async () => {
             const { editor, document: testDocument } = activate('\\[x\\]', new vscode.Position(0, 2))
-            acceptWorkspaceEdit(testDocument)
+            const applied = acceptWorkspaceEdit(testDocument)
 
             await pair.name('equationToggle')
-            await flushImmediate()
+            await applied
 
             assert.strictEqual(editor.document.getText(), '\\begin{equation*}x\\end{equation*}')
             assert.deepStrictEqual(editor.selection.active, new vscode.Position(0, 17))
@@ -300,10 +308,10 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
         it('should toggle an equation environment to display math', async () => {
             const { editor, document: testDocument } = activate('\\begin{equation*}\nx\n\\end{equation*}', new vscode.Position(1, 0))
-            acceptWorkspaceEdit(testDocument)
+            const applied = acceptWorkspaceEdit(testDocument)
 
             await pair.name('equationToggle')
-            await flushImmediate()
+            await applied
 
             assert.strictEqual(editor.document.getText(), '\\[\nx\n\\]')
             assert.deepStrictEqual(editor.selection.active, new vscode.Position(1, 0))
@@ -311,20 +319,20 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
         it('should keep a same-line cursor inside a toggled equation', async () => {
             const { editor } = activate('\\begin{equation*}x\\end{equation*}', new vscode.Position(0, 18))
-            acceptWorkspaceEdit()
+            const applied = acceptWorkspaceEdit()
 
             await pair.name('equationToggle')
-            await flushImmediate()
+            await applied
 
             assert.deepStrictEqual(editor.selection.active, new vscode.Position(0, 2))
         })
 
         it('should add name cursors when converting display math', async () => {
             const { editor } = activate('\\[\nx\n\\]', new vscode.Position(1, 0))
-            acceptWorkspaceEdit()
+            const applied = acceptWorkspaceEdit()
 
             await pair.name('cursor')
-            await flushImmediate()
+            await applied
 
             assert.deepStrictEqual(editor.selections, [
                 new vscode.Selection(0, 7, 0, 7),
@@ -335,20 +343,20 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         it('should not update selections when applying an edit fails', async () => {
             const position = new vscode.Position(1, 0)
             const { editor } = activate('\\[\nx\n\\]', position)
-            acceptWorkspaceEdit(undefined, false)
+            const applied = acceptWorkspaceEdit(undefined, false)
 
             await pair.name('selection')
-            await flushImmediate()
+            await applied
 
             assert.deepStrictEqual(editor.selections, [new vscode.Selection(position, position)])
         })
 
         it('should update selections when an empty edit reports failure', async () => {
             const { editor } = activate('\\begin{x}\ny\n\\end{x}', new vscode.Position(1, 0))
-            acceptWorkspaceEdit(undefined, false)
+            const applied = acceptWorkspaceEdit(undefined, false)
 
             await pair.name('selection')
-            await flushImmediate()
+            await applied
 
             assert.deepStrictEqual(editor.selections, [
                 new vscode.Selection(0, 7, 0, 8),

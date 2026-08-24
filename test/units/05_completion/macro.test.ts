@@ -3,7 +3,7 @@ import * as path from 'path'
 import * as sinon from 'sinon'
 import { lw } from '../../../src/lw'
 import type { CompletionItem } from '../../../src/types'
-import { assert, flushImmediate, get, mock, set } from '../utils'
+import { assert, deferred, get, mock, set } from '../utils'
 import { provider } from '../../../src/completion/completer/macro'
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
@@ -184,6 +184,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             const selection = new vscode.Selection(new vscode.Position(0, 0), new vscode.Position(0, 1))
             const replace = sinon.spy()
+            const editCalled = deferred<boolean>()
             const editor = {
                 document: {
                     languageId: 'latex',
@@ -192,6 +193,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 selections: [selection],
                 edit: sinon.stub().callsFake((callback: (editBuilder: vscode.TextEditorEdit) => void) => {
                     callback({ replace } as unknown as vscode.TextEditorEdit)
+                    editCalled.resolve(true)
                     return Promise.resolve(true)
                 })
             } as unknown as vscode.TextEditor
@@ -201,7 +203,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             lw.completion.macro.surround([ item as CompletionItem ])
             editorStub.restore()
             quickPickStub.restore()
-            await flushImmediate()
+            await editCalled.promise
 
             sinon.assert.calledOnce(replace)
             const [range, text] = replace.firstCall.args as [vscode.Range, string]
