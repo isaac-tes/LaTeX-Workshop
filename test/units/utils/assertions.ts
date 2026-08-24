@@ -97,14 +97,6 @@ export function pathListStrictEqual(actual: string[] | undefined, expected: stri
 }
 
 /**
- * Asserts that a sequence of text edits contains exactly the expected replacement texts.
- * Use this for formatter or fixer tests where edit ranges are tested separately.
- */
-export function editTextsStrictEqual(edits: readonly { newText: string }[], expected: readonly string[]): void {
-    assert.deepStrictEqual(edits.map(edit => edit.newText), expected)
-}
-
-/**
  * Asserts that an extension log contains a message or regular-expression match.
  * Use this after the code under test is expected to emit an extension log.
  */
