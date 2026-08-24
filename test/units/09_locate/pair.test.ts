@@ -3,7 +3,7 @@ import * as vscode from 'vscode'
 import * as sinon from 'sinon'
 import { lw } from '../../../src/lw'
 import { pair } from '../../../src/locate/pair'
-import { assert, get, mock, TextDocument } from '../utils'
+import { assert, flushImmediate, get, mock, TextDocument } from '../utils'
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     const texPath = get.path('main.tex')
@@ -63,10 +63,6 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             }
             return Promise.resolve(success)
         })
-    }
-
-    async function settle() {
-        await new Promise(resolve => setImmediate(resolve))
     }
 
     describe('build', () => {
@@ -270,7 +266,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             acceptWorkspaceEdit()
 
             await pair.name('selection')
-            await settle()
+            await flushImmediate()
 
             assert.deepStrictEqual(editor.selections, [
                 new vscode.Selection(0, 7, 0, 13),
@@ -283,7 +279,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             acceptWorkspaceEdit()
 
             await pair.name('cursor')
-            await settle()
+            await flushImmediate()
 
             assert.deepStrictEqual(editor.selections, [
                 new vscode.Selection(0, 7, 0, 7),
@@ -296,7 +292,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             acceptWorkspaceEdit(testDocument)
 
             await pair.name('equationToggle')
-            await settle()
+            await flushImmediate()
 
             assert.strictEqual(editor.document.getText(), '\\begin{equation*}x\\end{equation*}')
             assert.deepStrictEqual(editor.selection.active, new vscode.Position(0, 17))
@@ -307,7 +303,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             acceptWorkspaceEdit(testDocument)
 
             await pair.name('equationToggle')
-            await settle()
+            await flushImmediate()
 
             assert.strictEqual(editor.document.getText(), '\\[\nx\n\\]')
             assert.deepStrictEqual(editor.selection.active, new vscode.Position(1, 0))
@@ -318,7 +314,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             acceptWorkspaceEdit()
 
             await pair.name('equationToggle')
-            await settle()
+            await flushImmediate()
 
             assert.deepStrictEqual(editor.selection.active, new vscode.Position(0, 2))
         })
@@ -328,7 +324,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             acceptWorkspaceEdit()
 
             await pair.name('cursor')
-            await settle()
+            await flushImmediate()
 
             assert.deepStrictEqual(editor.selections, [
                 new vscode.Selection(0, 7, 0, 7),
@@ -342,7 +338,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             acceptWorkspaceEdit(undefined, false)
 
             await pair.name('selection')
-            await settle()
+            await flushImmediate()
 
             assert.deepStrictEqual(editor.selections, [new vscode.Selection(position, position)])
         })
@@ -352,7 +348,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             acceptWorkspaceEdit(undefined, false)
 
             await pair.name('selection')
-            await settle()
+            await flushImmediate()
 
             assert.deepStrictEqual(editor.selections, [
                 new vscode.Selection(0, 7, 0, 8),

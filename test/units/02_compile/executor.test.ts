@@ -7,7 +7,7 @@ import { Recipe } from '../../../src/compile/recipe'
 import type { PlanResult, StepResult, Tool } from '../../../src/compile/types'
 import { lw } from '../../../src/lw'
 import * as pick from '../../../src/utils/quick-pick'
-import { assert, get, mock, set } from '../utils'
+import { assert, deferred, flushImmediate, get, mock, set, sleep, waitFor } from '../utils'
 
 const rootFile = get.path('main.tex')
 const subfile = get.path('sub', 'main.tex')
@@ -51,29 +51,6 @@ function planResult(plan: Plan, overrides: Partial<PlanResult> = {}): PlanResult
         backend: result.backend,
         ...overrides
     }
-}
-
-function deferred<T>() {
-    let resolve!: (value: T | PromiseLike<T>) => void
-    let reject!: (reason?: unknown) => void
-    const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-        resolve = resolvePromise
-        reject = rejectPromise
-    })
-    return {promise, resolve, reject}
-}
-
-async function tick() {
-    await Promise.resolve()
-    await Promise.resolve()
-    await Promise.resolve()
-}
-
-async function waitUntil(predicate: () => boolean) {
-    for (let attempt = 0; attempt < 20 && !predicate(); attempt++) {
-        await tick()
-    }
-    assert.ok(predicate())
 }
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
@@ -334,7 +311,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             })
 
             const run = executor.run({isAuto: false, isBibChanged: false})
-            await waitUntil(() => executor.activePlan !== undefined)
+            await waitFor(() => executor.activePlan !== undefined, {interval: 0})
             assert.strictEqual(executor.activePlan, plans[0])
             assert.strictEqual(executor.compiledPDFWriting, 1)
             assert.pathStrictEqual(executor.compiledPDFPath, get.path('main.pdf'))
@@ -343,7 +320,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.strictEqual(executor.activePlan, undefined)
             assert.strictEqual(executor.backend, 'xetex')
             assert.strictEqual(executor.compiledPDFWriting, 1)
-            await new Promise(resolve => setTimeout(resolve, 0))
+            await sleep(0)
             assert.strictEqual(executor.compiledPDFWriting, 0)
         })
 
@@ -447,7 +424,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 error => error === 'stat failed'
             )
             assert.strictEqual(executor.activePlan, undefined)
-            await new Promise(resolve => setTimeout(resolve, 0))
+            await sleep(0)
             assert.strictEqual(executor.compiledPDFWriting, 0)
         })
     })
@@ -664,7 +641,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             installPlanRuns({A: active.promise, B: undefined!, C: undefined!}, order)
 
             const owner = executor.run({recipeName: 'A', isAuto: false, isBibChanged: false})
-            await waitUntil(() => executor.activePlan?.name === 'A')
+            await waitFor(() => executor.activePlan?.name === 'A', {interval: 0})
             await executor.run({recipeName: 'B', isAuto: false, isBibChanged: false})
             await executor.run({recipeName: 'C', isAuto: false, isBibChanged: false})
             active.resolve(planResult(plans.find(plan => plan.name === 'A')!))
@@ -683,10 +660,10 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             let ownerSettled = false
             const owner = executor.run({recipeName: 'A', isAuto: false, isBibChanged: false})
                 .then(() => { ownerSettled = true })
-            await waitUntil(() => executor.activePlan?.name === 'A')
+            await waitFor(() => executor.activePlan?.name === 'A', {interval: 0})
             const pending = executor.run({recipeName: 'B', isAuto: false, isBibChanged: false})
             active.resolve(planResult(plans.find(plan => plan.name === 'A')!))
-            await tick()
+            await flushImmediate()
             assert.strictEqual(ownerSettled, false)
             assert.deepStrictEqual(order, ['A'])
 
@@ -706,7 +683,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             createRecipe.withArgs(rootFile, 'latex', 'B').rejects(new Error('B failed'))
 
             const owner = executor.run({recipeName: 'A', isAuto: false, isBibChanged: false})
-            await waitUntil(() => executor.activePlan?.name === 'A')
+            await waitFor(() => executor.activePlan?.name === 'A', {interval: 0})
             await assert.rejects(
                 executor.run({recipeName: 'B', isAuto: false, isBibChanged: false}),
                 /B failed/
@@ -723,7 +700,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             createRecipe.withArgs(rootFile, 'latex', 'C').rejects(new Error('C failed'))
 
             const owner = executor.run({recipeName: 'A', isAuto: false, isBibChanged: false})
-            await waitUntil(() => executor.activePlan?.name === 'A')
+            await waitFor(() => executor.activePlan?.name === 'A', {interval: 0})
             await executor.run({recipeName: 'B', isAuto: false, isBibChanged: false})
             await assert.rejects(
                 executor.run({recipeName: 'C', isAuto: false, isBibChanged: false}),
@@ -743,7 +720,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             createRecipe.withArgs(rootFile, 'latex', 'C').rejects(new Error('C failed'))
 
             const owner = executor.run({recipeName: 'A', isAuto: false, isBibChanged: false})
-            await waitUntil(() => executor.activePlan?.name === 'A')
+            await waitFor(() => executor.activePlan?.name === 'A', {interval: 0})
             const older = executor.run({recipeName: 'B', isAuto: false, isBibChanged: false})
             await assert.rejects(
                 executor.run({recipeName: 'C', isAuto: false, isBibChanged: false}),
@@ -769,7 +746,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             createRecipe.withArgs(rootFile, 'latex', 'C').returns(newerRecipe.promise)
 
             const owner = executor.run({recipeName: 'A', isAuto: false, isBibChanged: false})
-            await waitUntil(() => executor.activePlan?.name === 'A')
+            await waitFor(() => executor.activePlan?.name === 'A', {interval: 0})
             const older = executor.run({recipeName: 'B', isAuto: false, isBibChanged: false})
             const newer = executor.run({recipeName: 'C', isAuto: false, isBibChanged: false})
             newerRecipe.resolve({
@@ -794,11 +771,11 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             installPlanRuns({A: active.promise, B: pendingRun.promise}, order)
 
             const owner = executor.run({recipeName: 'A', isAuto: false, isBibChanged: false})
-            await waitUntil(() => executor.activePlan?.name === 'A')
+            await waitFor(() => executor.activePlan?.name === 'A', {interval: 0})
             await executor.run({recipeName: 'B', isAuto: false, isBibChanged: false})
             assert.deepStrictEqual(order, ['A'])
             active.resolve(planResult(plans.find(plan => plan.name === 'A')!))
-            await waitUntil(() => executor.activePlan?.name === 'B')
+            await waitFor(() => executor.activePlan?.name === 'B', {interval: 0})
             pendingRun.resolve(planResult(plans.find(plan => plan.name === 'B')!))
             await owner
         })
@@ -828,7 +805,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             await second
             firstRecipe.reject(new Error('A failed'))
             await assert.rejects(first, /A failed/)
-            await waitUntil(() => order.includes('B'))
+            await waitFor(() => order.includes('B'), {interval: 0})
         })
 
         it('starts a drain when pending preparation finishes after the owner rejects', async () => {
@@ -848,7 +825,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 rootFile, cwd: get.path(), isExternal: false
             })
             await second
-            await waitUntil(() => order.includes('B'))
+            await waitFor(() => order.includes('B'), {interval: 0})
         })
 
         it('hands pending work to another drain after successful follow-up rejects', async () => {
@@ -859,12 +836,12 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             ;(lw.extra.clean as sinon.SinonStub).rejects(new Error('clean failed'))
 
             const owner = executor.run({recipeName: 'A', isAuto: false, isBibChanged: false})
-            await waitUntil(() => executor.activePlan?.name === 'A')
+            await waitFor(() => executor.activePlan?.name === 'A', {interval: 0})
             await executor.run({recipeName: 'B', isAuto: false, isBibChanged: false})
             active.resolve(planResult(plans.find(plan => plan.name === 'A')!))
             await assert.rejects(owner, /clean failed/)
             ;(lw.extra.clean as sinon.SinonStub).resolves()
-            await waitUntil(() => order.includes('B'))
+            await waitFor(() => order.includes('B'), {interval: 0})
         })
 
         it('updates PDF and aux state only when a pending Plan becomes active', async () => {
@@ -879,13 +856,13 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             installPlanRuns({A: active.promise, B: pending.promise}, order)
 
             const owner = executor.run({recipeName: 'A', isAuto: false, isBibChanged: false})
-            await waitUntil(() => executor.activePlan?.name === 'A')
+            await waitFor(() => executor.activePlan?.name === 'A', {interval: 0})
             await executor.run({recipeName: 'B', isAuto: false, isBibChanged: false})
             assert.pathStrictEqual(executor.compiledPDFPath, get.path('main.pdf'))
             assert.ok(getAuxDir.calledOnceWithExactly(rootFile))
 
             active.resolve(planResult(plans.find(plan => plan.name === 'A')!))
-            await waitUntil(() => executor.activePlan?.name === 'B')
+            await waitFor(() => executor.activePlan?.name === 'B', {interval: 0})
             assert.pathStrictEqual(executor.compiledPDFPath, get.path('other.pdf'))
             assert.ok(getAuxDir.calledWithExactly(otherRoot))
             pending.resolve(planResult(plans.find(plan => plan.name === 'B')!))
@@ -897,7 +874,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const order: string[] = []
             installPlanRuns({A: active.promise, B: undefined!}, order)
             const owner = executor.run({recipeName: 'A', isAuto: false, isBibChanged: false})
-            await waitUntil(() => executor.activePlan?.name === 'A')
+            await waitFor(() => executor.activePlan?.name === 'A', {interval: 0})
             await executor.run({recipeName: 'B', isAuto: false, isBibChanged: false})
             active.resolve(planResult(plans.find(plan => plan.name === 'A')!, {skipped: true}))
             await owner
@@ -939,7 +916,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 })
 
                 const owner = executor.run({recipeName: 'A', isAuto: false, isBibChanged: false})
-                await waitUntil(() => executor.activePlan?.name === 'A')
+                await waitFor(() => executor.activePlan?.name === 'A', {interval: 0})
                 await executor.run({recipeName: 'B', isAuto: false, isBibChanged: false})
                 active.resolve(failed(plans.find(plan => plan.name === 'A')!, status))
                 await owner
@@ -971,9 +948,9 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             })
 
             const owner = executor.run({recipeName: 'A', isAuto: false, isBibChanged: false})
-            await waitUntil(() => executor.activePlan?.name === 'A')
+            await waitFor(() => executor.activePlan?.name === 'A', {interval: 0})
             active.resolve(failed(plans.find(plan => plan.name === 'A')!))
-            await waitUntil(() => (lw.extra.clean as sinon.SinonStub).calledOnce)
+            await waitFor(() => (lw.extra.clean as sinon.SinonStub).calledOnce, {interval: 0})
             await executor.run({recipeName: 'B', isAuto: false, isBibChanged: false})
             cleaning.resolve(undefined)
             await owner
@@ -1005,7 +982,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             })
 
             const owner = executor.run({recipeName: 'A', isAuto: false, isBibChanged: false})
-            await waitUntil(() => executor.activePlan?.name === 'A')
+            await waitFor(() => executor.activePlan?.name === 'A', {interval: 0})
             const late = executor.run({recipeName: 'B', isAuto: false, isBibChanged: false})
             const error = executor.terminate()
             assert.strictEqual(error?.message, 'kill failed')
@@ -1042,7 +1019,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             })
 
             const owner = executor.run({recipeName: 'A', isAuto: false, isBibChanged: false})
-            await waitUntil(() => executor.activePlan?.name === 'A')
+            await waitFor(() => executor.activePlan?.name === 'A', {interval: 0})
             executor.terminate()
             await executor.run({recipeName: 'D', isAuto: false, isBibChanged: false})
             active.resolve(failed(plans.find(plan => plan.name === 'A')!, 'terminated'))
@@ -1074,7 +1051,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             })
 
             const owner = executor.run({recipeName: 'A', isAuto: false, isBibChanged: false})
-            await waitUntil(() => executor.activePlan?.name === 'A')
+            await waitFor(() => executor.activePlan?.name === 'A', {interval: 0})
             const late = executor.run({recipeName: 'B', isAuto: false, isBibChanged: false})
             executor.terminate()
             lateRecipe.reject(new Error('late failed'))
@@ -1099,7 +1076,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 return plan
             })
             const owner = executor.run({recipeName: 'A', isAuto: false, isBibChanged: false})
-            await waitUntil(() => executor.activePlan?.name === 'A')
+            await waitFor(() => executor.activePlan?.name === 'A', {interval: 0})
             createExternal.returns({
                 name: 'External', tools: [{name: 'make', command: 'make'}],
                 rootFile, cwd: get.path(), isExternal: true

@@ -1,7 +1,7 @@
 import * as path from 'path'
 import * as sinon from 'sinon'
 
-import { assert, get, mock } from '../utils'
+import { assert, collectAsync, get, mock } from '../utils'
 import { lw } from '../../../src/lw'
 import {
     type AuxiliaryDiscovery,
@@ -24,11 +24,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     }
 
     async function discover(owner: string): Promise<AuxiliaryDiscovery[]> {
-        const discoveries: AuxiliaryDiscovery[] = []
-        for await (const discovery of discoverFls(owner)) {
-            discoveries.push(discovery)
-        }
-        return discoveries
+        return collectAsync(discoverFls(owner))
     }
 
     before(() => {

@@ -1,7 +1,7 @@
 import * as path from 'path'
 import * as sinon from 'sinon'
 
-import { assert, get, mock } from '../utils'
+import { assert, collectAsync, deferred, get, mock } from '../utils'
 import { lw } from '../../../src/lw'
 import type { FileCache } from '../../../src/types'
 import {
@@ -36,20 +36,8 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     }
 
     async function discover(fileCache: FileCache, rootDir = path.dirname(fileCache.filePath)): Promise<BibliographyDiscovery[]> {
-        const discoveries: BibliographyDiscovery[] = []
         const source = {filePath: fileCache.filePath, contentTrimmed: fileCache.contentTrimmed}
-        for await (const discovery of discoverBibliography(source, rootDir)) {
-            discoveries.push(discovery)
-        }
-        return discoveries
-    }
-
-    function deferred<T>() {
-        let resolve!: (value: T | PromiseLike<T>) => void
-        const promise = new Promise<T>(promiseResolve => {
-            resolve = promiseResolve
-        })
-        return {promise, resolve}
+        return collectAsync(discoverBibliography(source, rootDir))
     }
 
     before(() => {

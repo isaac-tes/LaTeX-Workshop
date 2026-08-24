@@ -3,7 +3,7 @@ import os from 'os'
 import * as path from 'path'
 import { createRequire } from 'module'
 import * as sinon from 'sinon'
-import { assert, get, log, mock, set, sleep } from '../utils'
+import { assert, deferred, get, log, mock, set, sleep, waitFor } from '../utils'
 import { lw } from '../../../src/lw'
 import * as cacheModule from '../../../src/core/cache'
 import * as auxiliaries from '../../../src/core/cache/auxiliaries'
@@ -20,26 +20,6 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     const sourceWatcherTestHooks = lw.watcher.src as unknown as {
         onDidChange: (event: 'create' | 'change', uri: vscode.Uri) => Promise<void>,
         onDidDelete: (uri: vscode.Uri) => Promise<void>
-    }
-
-    function deferred<T>() {
-        let resolve!: (value: T | PromiseLike<T>) => void
-        let reject!: (reason?: unknown) => void
-        const promise = new Promise<T>((promiseResolve, promiseReject) => {
-            resolve = promiseResolve
-            reject = promiseReject
-        })
-        return {promise, resolve, reject}
-    }
-
-    async function waitFor(condition: () => boolean, timeout = 1000): Promise<void> {
-        const started = Date.now()
-        while (!condition()) {
-            if (Date.now() - started >= timeout) {
-                throw new Error('Timed out waiting for cache test condition.')
-            }
-            await sleep(10)
-        }
     }
 
     before(() => {

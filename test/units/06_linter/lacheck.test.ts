@@ -3,7 +3,7 @@ import * as path from 'path'
 import { EventEmitter } from 'events'
 import type { ChildProcess } from 'child_process'
 import * as sinon from 'sinon'
-import { assert, mock, set, TextDocument } from '../utils'
+import { assert, flushImmediate, mock, set, TextDocument } from '../utils'
 import { lw } from '../../../src/lw'
 import { laCheck } from '../../../src/lint/latex-linter/lacheck'
 import * as convertFilename from '../../../src/utils/convertfilename'
@@ -93,7 +93,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
 		it('should parse a basic log entry for a single file', async () => {
 			laCheck.parseLog('"main.tex", line 7: double space at "~~"\n', '/tmp/main.tex')
-			await new Promise(resolve => setImmediate(resolve))
+			await flushImmediate()
 
 			const diags = laCheck.linterDiagnostics.get(vscode.Uri.file(path.resolve('/tmp', 'main.tex')))
 			assert.strictEqual(diags?.length, 1)
@@ -109,7 +109,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 			const log = '"main.tex", line 7: double space at "~~"\n** sub/sub:\n"sub/s.tex", line 2: double space at "~~"\n'
 
 			laCheck.parseLog(log, '/tmp/main.tex')
-			await new Promise(resolve => setImmediate(resolve))
+			await flushImmediate()
 
 			assert.strictEqual(laCheck.linterDiagnostics.get(vscode.Uri.file(path.resolve('/tmp', 'main.tex')))?.length, 1)
 			assert.strictEqual(laCheck.linterDiagnostics.get(vscode.Uri.file(path.resolve('/tmp', 'sub/s.tex')))?.length, 1)
@@ -120,7 +120,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 			const log = '"main.tex", line 3: <- perhaps a typo\n... line 9 ... -> consider rewriting\n'
 
 			laCheck.parseLog(log, '/tmp/main.tex')
-			await new Promise(resolve => setImmediate(resolve))
+			await flushImmediate()
 
 			const diags = laCheck.linterDiagnostics.get(vscode.Uri.file(path.resolve('/tmp', 'main.tex')))
 			assert.strictEqual(diags?.length, 1)
@@ -131,7 +131,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 			const log = '"main.tex", line 3: <- perhaps a typo\nthis line does not match\n'
 
 			laCheck.parseLog(log, '/tmp/main.tex')
-			await new Promise(resolve => setImmediate(resolve))
+			await flushImmediate()
 
 			const diags = laCheck.linterDiagnostics.get(vscode.Uri.file(path.resolve('/tmp', 'main.tex')))
 			assert.strictEqual(diags?.length, 1)
@@ -140,7 +140,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
 		it('should ignore malformed lines', async () => {
 			laCheck.parseLog('not a lacheck log line\nanother malformed line\n', '/tmp/main.tex')
-			await new Promise(resolve => setImmediate(resolve))
+			await flushImmediate()
 
 			assert.strictEqual(laCheck.linterDiagnostics.get(vscode.Uri.file(path.resolve('/tmp', 'main.tex')))?.length, 0)
 		})
@@ -151,14 +151,14 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 			])
 
 			laCheck.parseLog('')
-			await new Promise(resolve => setImmediate(resolve))
+			await flushImmediate()
 
 			assert.strictEqual(laCheck.linterDiagnostics.get(vscode.Uri.file('/tmp/old.tex'))?.length, 0)
 		})
 
 		it('should resolve relative paths from provided filePath directory', async () => {
 			laCheck.parseLog('"sub/s.tex", line 2: warning\n', '/tmp/main.tex')
-			await new Promise(resolve => setImmediate(resolve))
+			await flushImmediate()
 
 			assert.strictEqual(laCheck.linterDiagnostics.get(vscode.Uri.file(path.resolve('/tmp', 'sub/s.tex')))?.length, 1)
 		})
@@ -167,7 +167,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 			lw.root.file.path = '/workspace/project/main.tex'
 
 			laCheck.parseLog('"sub/s.tex", line 4: warning\n')
-			await new Promise(resolve => setImmediate(resolve))
+			await flushImmediate()
 
 			assert.strictEqual(laCheck.linterDiagnostics.get(vscode.Uri.file(path.resolve('/workspace/project', 'sub/s.tex')))?.length, 1)
 		})
@@ -182,7 +182,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 			].join('\n') + '\n'
 
 			laCheck.parseLog(log, '/tmp/main.tex')
-			await new Promise(resolve => setImmediate(resolve))
+			await flushImmediate()
 
 			assert.strictEqual(laCheck.linterDiagnostics.get(vscode.Uri.file(path.resolve('/tmp', 'main.tex')))?.length, 1)
 			assert.strictEqual(laCheck.linterDiagnostics.get(vscode.Uri.file(path.resolve('/tmp', 'bibstyle.bbx')))?.length, 1)
@@ -196,7 +196,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 			convertStub = sinon.stub(convertFilename, 'convertFilenameEncoding').resolves('/tmp/converted.tex')
 
 			laCheck.parseLog('"missing.tex", line 6: converted warning\n', '/tmp/main.tex')
-			await new Promise(resolve => setImmediate(resolve))
+			await flushImmediate()
 
 			assert.strictEqual(laCheck.linterDiagnostics.get(vscode.Uri.file('/tmp/converted.tex'))?.length, 1)
 			assert.ok(!laCheck.linterDiagnostics.get(vscode.Uri.file(path.resolve('/tmp', 'missing.tex')))?.length)
@@ -207,7 +207,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 			convertStub = sinon.stub(convertFilename, 'convertFilenameEncoding').resolves(undefined)
 
 			laCheck.parseLog('"missing.tex", line 6: fallback warning\n', '/tmp/main.tex')
-			await new Promise(resolve => setImmediate(resolve))
+			await flushImmediate()
 
 			assert.strictEqual(laCheck.linterDiagnostics.get(vscode.Uri.file(path.resolve('/tmp', 'missing.tex')))?.length, 1)
 		})
@@ -246,7 +246,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 			spawnStub = sinon.stub(lw.external, 'spawn').throws({ stdout: log })
 
 			await laCheck.lintRootFile('/tmp/main.tex')
-			await new Promise(resolve => setImmediate(resolve))
+			await flushImmediate()
 
 			assert.strictEqual(laCheck.linterDiagnostics.get(vscode.Uri.file(path.resolve('/tmp', 'main.tex')))?.length, 1)
 		})
@@ -314,7 +314,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 			const document = new TextDocument('/tmp/project/main.tex', '', {})
 
 			await laCheck.lintFile(document)
-			await new Promise(resolve => setImmediate(resolve))
+			await flushImmediate()
 
 			assert.strictEqual(laCheck.linterDiagnostics.get(vscode.Uri.file(path.resolve('/tmp/project', 'main.tex')))?.length, 1)
 		})

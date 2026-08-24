@@ -3,7 +3,7 @@ import * as path from 'path'
 import * as sinon from 'sinon'
 import { lw } from '../../../src/lw'
 import type { CompletionItem } from '../../../src/types'
-import { assert, get, mock, set } from '../utils'
+import { assert, flushImmediate, get, mock, set } from '../utils'
 import { provider } from '../../../src/completion/completer/macro'
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
@@ -201,7 +201,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             lw.completion.macro.surround([ item as CompletionItem ])
             editorStub.restore()
             quickPickStub.restore()
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             sinon.assert.calledOnce(replace)
             const [range, text] = replace.firstCall.args as [vscode.Range, string]

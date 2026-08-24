@@ -3,7 +3,7 @@ import * as path from 'path'
 import { EventEmitter } from 'events'
 import type { ChildProcess } from 'child_process'
 import * as sinon from 'sinon'
-import { assert, mock, set, TextDocument } from '../utils'
+import { assert, flushImmediate, mock, set, TextDocument } from '../utils'
 import { lw } from '../../../src/lw'
 import { chkTeX } from '../../../src/lint/latex-linter/chktex'
 
@@ -97,7 +97,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     describe('chkTeX.parseLog', () => {
         it('should parse a basic warning log entry', async () => {
             chkTeX.parseLog('/tmp/main.tex:5:18:1:Warning:24:Delete this space to maintain correct pagereferences.\n', '/tmp/main.tex')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             const diags = chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))
             assert.strictEqual(diags?.length, 1)
@@ -107,7 +107,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
         it('should parse a basic error log entry', async () => {
             chkTeX.parseLog('/tmp/main.tex:3:5:1:Error:1:Command terminated with space.\n', '/tmp/main.tex')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             const diags = chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))
             assert.strictEqual(diags?.length, 1)
@@ -116,7 +116,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
         it('should parse a typesetting log entry as information', async () => {
             chkTeX.parseLog('/tmp/main.tex:2:1:1:Typesetting:6:No space found.\n', '/tmp/main.tex')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             const diags = chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))
             assert.strictEqual(diags?.length, 1)
@@ -126,7 +126,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         it('should parse log entries for multiple files', async () => {
             const log = '/tmp/main.tex:5:18:1:Warning:24:Delete this space to maintain correct pagereferences.\n/tmp/sub/s.tex:1:26:1:Warning:24:Delete this space to maintain correct pagereferences.\n'
             chkTeX.parseLog(log)
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             assert.strictEqual(chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))?.length, 1)
             assert.strictEqual(chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/sub/s.tex'))?.length, 1)
@@ -139,7 +139,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             ])
 
             chkTeX.parseLog('/tmp/main.tex:5:1:1:Warning:24:Some warning.\n')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             // Old diagnostics should be gone because clear() was called
             assert.strictEqual(chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/other.tex'))?.length, 0)
@@ -152,7 +152,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             ])
 
             chkTeX.parseLog('', '/tmp/main.tex')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             const diags = chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))
             assert.strictEqual(diags?.length, 0)
@@ -161,7 +161,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         it('should override file path with singleFileOriginalPath', async () => {
             // Log says /tmp/input.tex but we override with /tmp/main.tex
             chkTeX.parseLog('/tmp/input.tex:5:1:1:Warning:24:Some warning.\n', '/tmp/main.tex')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             const diags = chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))
             assert.strictEqual(diags?.length, 1)
@@ -171,7 +171,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
         it('should resolve relative file paths using root dir', async () => {
             chkTeX.parseLog('main.tex:5:1:1:Warning:24:Some warning.\n')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             // Should resolve 'main.tex' relative to lw.root.dir.path ('/tmp')
             const diags = chkTeX.linterDiagnostics.get(vscode.Uri.file(path.resolve(lw.root.dir.path!, 'main.tex')))
@@ -180,28 +180,28 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
         it('should not show diagnostics for .sty files', async () => {
             chkTeX.parseLog('/tmp/style.sty:5:1:1:Warning:24:Some warning.\n')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             assert.ok(!chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/style.sty'))?.length)
         })
 
         it('should show diagnostics for .tex files', async () => {
             chkTeX.parseLog('/tmp/main.tex:5:1:1:Warning:24:Some warning.\n')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             assert.strictEqual(chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))?.length, 1)
         })
 
         it('should show diagnostics for .dtx files', async () => {
             chkTeX.parseLog('/tmp/main.dtx:5:1:1:Warning:24:Some warning.\n')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             assert.strictEqual(chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.dtx'))?.length, 1)
         })
 
         it('should set correct line and column from log entry', async () => {
             chkTeX.parseLog('/tmp/main.tex:7:12:3:Warning:24:Some warning.\n', '/tmp/main.tex')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             const diags = chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))
             assert.strictEqual(diags?.length, 1)
@@ -212,7 +212,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
         it('should set diagnostic code from log entry', async () => {
             chkTeX.parseLog('/tmp/main.tex:5:1:1:Warning:24:Delete this space.\n', '/tmp/main.tex')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             const diags = chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))
             assert.strictEqual(diags?.[0].code, 24)
@@ -220,7 +220,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
         it('should set diagnostic source to ChkTeX', async () => {
             chkTeX.parseLog('/tmp/main.tex:5:1:1:Warning:24:Some warning.\n', '/tmp/main.tex')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             const diags = chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))
             assert.strictEqual(diags?.[0].source, 'ChkTeX')
@@ -228,7 +228,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
         it('should include message text with code prefix', async () => {
             chkTeX.parseLog('/tmp/main.tex:5:1:1:Warning:24:Delete this space.\n', '/tmp/main.tex')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             const diags = chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))
             assert.match(diags?.[0].message ?? '', /^24: Delete this space\./)
@@ -248,7 +248,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             // column=9 means after one tab (tabSize=8 default) + char at position 1
             // With tab at position 0 (8-wide), position 9 corresponds to index 1 in string
             chkTeX.parseLog('/tmp/main.tex:1:9:1:Warning:24:Some warning.\n', '/tmp/main.tex')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             const diags = chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))
             // After conversion: tab takes 8 positions, col=9 means index=1, so VS Code col=1 (0-based)
@@ -261,7 +261,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             // col=9 in 1-based, should become 8 (9-1) in 0-based without tab conversion
             chkTeX.parseLog('/tmp/main.tex:1:9:1:Warning:24:Some warning.\n', '/tmp/main.tex')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             const diags = chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))
             // Without conversion: 9 - 1 = 8 (0-based)
@@ -280,7 +280,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             // col=5 means after tab (size=4) + char 'h' at index 0; position 4 is the tab
             chkTeX.parseLog('/tmp/main.tex:1:5:1:Warning:24:Some warning.\n', '/tmp/main.tex')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             const diags = chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))
             // col = colArg - 1 = 4; i=0, pos=0; col(4) > pos(0): pos += tabSize(4) -> pos=4; i=1
@@ -290,7 +290,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
         it('should handle empty log string gracefully', async () => {
             chkTeX.parseLog('')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             // No diagnostics should be set for nonexistent files
             let totalDiags = 0
@@ -697,7 +697,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             // col=1 should become position 0 (0-based) in VS Code
             chkTeX.parseLog('/tmp/main.tex:1:1:1:Warning:24:Some warning.\n', '/tmp/main.tex')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             const diags = chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))
             assert.strictEqual(diags?.[0].range.start.character, 0)
@@ -715,7 +715,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             // col=4 means 3 bytes (for '日') + 1 byte (for 'h'); should map to character index 1
             chkTeX.parseLog('/tmp/main.tex:1:4:1:Warning:24:Some warning.\n', '/tmp/main.tex')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             const diags = chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))
             // col = colArg - 1 = 3; pos=0; 日 bytes=3; col(3) <= pos(0)? No -> pos+=3 -> pos=3; i=1
@@ -733,7 +733,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             })
 
             chkTeX.parseLog('/tmp/main.tex:999:1:1:Warning:24:Some warning.\n', '/tmp/main.tex')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             // Should not throw; diagnostic is still created with the raw column
             const diags = chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))
@@ -748,7 +748,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             // Just verify no exception is thrown and diagnostics collection is updated
             chkTeX.parseLog('/tmp/main.tex:5:1:1:Warning:24:Some warning.\n')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             // Should attempt to set diagnostics without throwing
             assert.ok(true)
@@ -757,7 +757,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         it('should aggregate multiple diagnostics for the same file', async () => {
             const log = '/tmp/main.tex:1:1:1:Warning:1:First warning.\n/tmp/main.tex:2:1:1:Warning:2:Second warning.\n'
             chkTeX.parseLog(log, '/tmp/main.tex')
-            await new Promise(resolve => setImmediate(resolve))
+            await flushImmediate()
 
             const diags = chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))
             assert.strictEqual(diags?.length, 2)

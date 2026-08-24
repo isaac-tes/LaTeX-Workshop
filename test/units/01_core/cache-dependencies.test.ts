@@ -1,7 +1,7 @@
 import * as path from 'path'
 import * as sinon from 'sinon'
 
-import { assert, get, mock, set } from '../utils'
+import { assert, collectAsync, get, mock, set } from '../utils'
 import { lw } from '../../../src/lw'
 import type { FileCache } from '../../../src/types'
 import * as coreUtils from '../../../src/utils/utils'
@@ -36,16 +36,12 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     }
 
     async function discover(fileCache: FileCache, rootPath: string): Promise<DependencyDiscovery[]> {
-        const discoveries: DependencyDiscovery[] = []
         const source = {
             filePath: fileCache.filePath,
             contentTrimmed: fileCache.contentTrimmed,
             childPaths: fileCache.children.map(child => child.filePath)
         }
-        for await (const discovery of discoverDependencies(source, rootPath)) {
-            discoveries.push(discovery)
-        }
-        return discoveries
+        return collectAsync(discoverDependencies(source, rootPath))
     }
 
     before(() => {
