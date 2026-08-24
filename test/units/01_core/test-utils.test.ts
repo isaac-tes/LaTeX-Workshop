@@ -7,7 +7,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         return new TextDocument('/tmp/main.tex', content, {})
     }
 
-    describe('TextEditor.getText', () => {
+    describe('TextDocument.getText', () => {
         it('should return the complete document text', () => {
             const testDocument = document('first\nsecond')
 
@@ -24,7 +24,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
     })
 
-    describe('TextEditor.offsetAt and positionAt', () => {
+    describe('TextDocument.offsetAt and positionAt', () => {
         it('should convert positions and offsets in both directions', () => {
             const testDocument = document('first\nsecond')
 
@@ -41,6 +41,25 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.strictEqual(testDocument.lineCount, 2)
             assert.strictEqual(testDocument.offsetAt(new vscode.Position(1, 1)), 3)
             assert.deepStrictEqual(testDocument.positionAt(3), new vscode.Position(1, 1))
+        })
+    })
+
+    describe('test assertions', () => {
+        it('should not modify lists when comparing them without order', () => {
+            const actual = ['b', 'a']
+            const expected = ['a', 'b']
+
+            assert.listStrictEqual(actual, expected)
+
+            assert.deepStrictEqual(actual, ['b', 'a'])
+            assert.deepStrictEqual(expected, ['a', 'b'])
+        })
+
+        it('should distinguish missing paths from the current directory', () => {
+            assert.pathStrictEqual(undefined, undefined)
+            assert.pathNotStrictEqual(undefined, '.')
+            assert.throws(() => assert.pathStrictEqual(undefined, '.'))
+            assert.throws(() => assert.pathNotStrictEqual(undefined, undefined))
         })
     })
 })

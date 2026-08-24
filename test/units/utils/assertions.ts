@@ -28,7 +28,7 @@ export function listStrictEqual<T>(actual: T[] | undefined, expected: T[] | unde
     if (actual === undefined || expected === undefined) {
         assert.strictEqual(actual, expected)
     } else {
-        assert.deepStrictEqual(actual.sort(), expected.sort(), message)
+        assert.deepStrictEqual([...actual].sort(), [...expected].sort(), message)
     }
 }
 
@@ -36,9 +36,9 @@ export function listStrictEqual<T>(actual: T[] | undefined, expected: T[] | unde
  * Normalizes two paths before a platform-independent comparison.
  * This is an implementation detail shared by the path assertion helpers.
  */
-function getPaths(actual: string | undefined, expected: string | undefined): [string, string] {
-    actual = path.normalize(actual ?? '.')
-    expected = path.normalize(expected ?? '.')
+function getPaths(actual: string, expected: string): [string, string] {
+    actual = path.normalize(actual)
+    expected = path.normalize(expected)
     if (os.platform() === 'win32') {
         actual = actual.replace(/^([a-zA-Z]):/, (_, p1: string) => p1.toLowerCase() + ':')
         expected = expected.replace(/^([a-zA-Z]):/, (_, p1: string) => p1.toLowerCase() + ':')
@@ -51,6 +51,10 @@ function getPaths(actual: string | undefined, expected: string | undefined): [st
  * Use this whenever a test compares paths produced by the extension.
  */
 export function pathStrictEqual(actual: string | undefined, expected: string | undefined, message?: string | Error): void {
+    if (actual === undefined || expected === undefined) {
+        assert.strictEqual(actual, expected, message)
+        return
+    }
     [actual, expected] = getPaths(actual, expected)
     assert.strictEqual(path.relative(actual, expected), '', message ?? `Paths are not equal: ${actual} !== ${expected} .`)
 }
@@ -60,6 +64,10 @@ export function pathStrictEqual(actual: string | undefined, expected: string | u
  * Use this for tests that verify two files or workspace locations do not alias.
  */
 export function pathNotStrictEqual(actual: string | undefined, expected: string | undefined, message?: string | Error): void {
+    if (actual === undefined || expected === undefined) {
+        assert.notStrictEqual(actual, expected, message)
+        return
+    }
     [actual, expected] = getPaths(actual, expected)
     assert.notStrictEqual(path.relative(actual, expected), '', message ?? `Paths are equal: ${actual} === ${expected} .`)
 }
