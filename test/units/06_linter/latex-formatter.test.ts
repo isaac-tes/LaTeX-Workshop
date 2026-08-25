@@ -6,6 +6,7 @@ import { lw } from '../../../src/lw'
 import { formatter } from '../../../src/lint/latex-formatter'
 import { latexindent } from '../../../src/lint/latex-formatter/latexindent'
 import { texfmt } from '../../../src/lint/latex-formatter/tex-fmt'
+import { badness } from '../../../src/lint/latex-formatter/badness'
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     before(() => {
@@ -29,13 +30,14 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     }
 
     /**
-     * Stub latexindent and texfmt formatDocument, returning stubs so callers
+     * Stub latexindent, texfmt, and badness formatDocument, returning stubs so callers
      * can configure resolved values and restore them later.
      */
-    function stubFormatters(): { latexindentStub: sinon.SinonStub, texfmtStub: sinon.SinonStub } {
+    function stubFormatters(): { latexindentStub: sinon.SinonStub, texfmtStub: sinon.SinonStub, badnessStub: sinon.SinonStub } {
         return {
             latexindentStub: sinon.stub(latexindent, 'formatDocument').resolves(undefined),
             texfmtStub: sinon.stub(texfmt, 'formatDocument').resolves(undefined),
+            badnessStub: sinon.stub(badness, 'formatDocument').resolves(undefined),
         }
     }
 
@@ -43,14 +45,16 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         describe('formatter selection', () => {
             let latexindentStub: sinon.SinonStub
             let texfmtStub: sinon.SinonStub
+            let badnessStub: sinon.SinonStub
 
             beforeEach(() => {
-                ({ latexindentStub, texfmtStub } = stubFormatters())
+                ({ latexindentStub, texfmtStub, badnessStub } = stubFormatters())
             })
 
             afterEach(() => {
                 latexindentStub.restore()
                 texfmtStub.restore()
+                badnessStub.restore()
             })
 
             it('should delegate to latexindent when formatting.latex is latexindent', async () => {
@@ -65,6 +69,14 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 await formatter.provideDocumentFormattingEdits(makeDocument(), dummyOptions, dummyToken)
                 assert.strictEqual(texfmtStub.callCount, 1)
                 assert.strictEqual(latexindentStub.callCount, 0)
+            })
+
+            it('should delegate to badness when formatting.latex is badness', async () => {
+                set.config('formatting.latex', 'badness')
+                await formatter.provideDocumentFormattingEdits(makeDocument(), dummyOptions, dummyToken)
+                assert.strictEqual(badnessStub.callCount, 1)
+                assert.strictEqual(latexindentStub.callCount, 0)
+                assert.strictEqual(texfmtStub.callCount, 0)
             })
 
             it('should log error and use no formatter when formatting.latex is none', async () => {
