@@ -7,6 +7,7 @@ import type { ChildProcess } from 'child_process'
 import { assert, mock, set, TextDocument } from '../utils'
 import { lw } from '../../../src/lw'
 import { lint } from '../../../src/lint/latex-linter'
+import { badness } from '../../../src/lint/latex-linter/badness'
 import { chkTeX } from '../../../src/lint/latex-linter/chktex'
 import { laCheck } from '../../../src/lint/latex-linter/lacheck'
 import { processWrapper } from '../../../src/lint/latex-linter/utils'
@@ -19,6 +20,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     beforeEach(() => {
         set.config('linting.chktex.enabled', true)
         set.config('linting.lacheck.enabled', true)
+        set.config('linting.badness.enabled', false)
         set.config('linting.run', 'onType')
         set.config('linting.delay', 300)
         ;(lw.root.getWorkspace as sinon.SinonStub).returns(vscode.workspace.workspaceFolders?.[0].uri)
@@ -32,12 +34,14 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
     describe('lint.root', () => {
         let chktexLintRootFileStub: sinon.SinonStub
         let lacheckLintRootFileStub: sinon.SinonStub
+        let badnessLintRootFileStub: sinon.SinonStub | undefined
         let chktexClearStub: sinon.SinonStub | undefined
         let lacheckClearStub: sinon.SinonStub | undefined
 
         beforeEach(() => {
             chktexLintRootFileStub = sinon.stub(chkTeX, 'lintRootFile').resolves()
             lacheckLintRootFileStub = sinon.stub(laCheck, 'lintRootFile').resolves()
+            badnessLintRootFileStub = undefined
             chktexClearStub = undefined
             lacheckClearStub = undefined
         })
@@ -45,6 +49,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         afterEach(() => {
             chktexLintRootFileStub.restore()
             lacheckLintRootFileStub.restore()
+            badnessLintRootFileStub?.restore()
             chktexClearStub?.restore()
             lacheckClearStub?.restore()
         })
@@ -56,6 +61,16 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.strictEqual(chktexLintRootFileStub.firstCall.args[0], '/tmp/main.tex')
             assert.strictEqual(lacheckLintRootFileStub.callCount, 1)
             assert.strictEqual(lacheckLintRootFileStub.firstCall.args[0], '/tmp/main.tex')
+        })
+
+        it('should lint root file with Badness when enabled', () => {
+            set.config('linting.badness.enabled', true)
+            badnessLintRootFileStub = sinon.stub(badness, 'lintRootFile').resolves()
+
+            lint.root()
+
+            assert.strictEqual(badnessLintRootFileStub.callCount, 1)
+            assert.strictEqual(badnessLintRootFileStub.firstCall.args[0], '/tmp/main.tex')
         })
 
         it('should only lint with chktex and clear lacheck diagnostics when lacheck is disabled', () => {
@@ -108,6 +123,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         let clock: sinon.SinonFakeTimers
         let chktexLintFileStub: sinon.SinonStub
         let lacheckLintFileStub: sinon.SinonStub
+        let badnessLintFileStub: sinon.SinonStub | undefined
         let chktexClearStub: sinon.SinonStub | undefined
         let lacheckClearStub: sinon.SinonStub | undefined
         let document: TextDocument
@@ -116,6 +132,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             clock = sinon.useFakeTimers({ shouldClearNativeTimers: true })
             chktexLintFileStub = sinon.stub(chkTeX, 'lintFile').resolves()
             lacheckLintFileStub = sinon.stub(laCheck, 'lintFile').resolves()
+            badnessLintFileStub = undefined
             chktexClearStub = undefined
             lacheckClearStub = undefined
             document = new TextDocument('/tmp/main.tex', '\\section{A}', {})
@@ -124,6 +141,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         afterEach(() => {
             chktexLintFileStub.restore()
             lacheckLintFileStub.restore()
+            badnessLintFileStub?.restore()
             chktexClearStub?.restore()
             lacheckClearStub?.restore()
             clock.restore()
@@ -141,6 +159,17 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.strictEqual(lacheckCallCountBeforeDelay, 0)
             assert.strictEqual(chktexLintFileStub.callCount, 1)
             assert.strictEqual(lacheckLintFileStub.callCount, 1)
+        })
+
+        it('should lint the active document with Badness when enabled', async () => {
+            set.config('linting.badness.enabled', true)
+            badnessLintFileStub = sinon.stub(badness, 'lintFile').resolves()
+
+            lint.on(document)
+            await clock.tickAsync(300)
+
+            assert.strictEqual(badnessLintFileStub.callCount, 1)
+            assert.strictEqual((badnessLintFileStub.firstCall.args[0] as vscode.TextDocument).fileName, '/tmp/main.tex')
         })
 
         it('should not lint on type when run mode is not onType', async () => {

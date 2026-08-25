@@ -1,6 +1,7 @@
 import * as vscode from 'vscode'
 import { lw } from '../lw'
 import type { LaTeXLinter } from '../types'
+import { badness } from './latex-linter/badness'
 import { chkTeX } from './latex-linter/chktex'
 import { laCheck } from './latex-linter/lacheck'
 
@@ -25,6 +26,11 @@ function getLinters(scope?: vscode.ConfigurationScope): LaTeXLinter[] {
         linters.push(laCheck)
     } else {
         laCheck.linterDiagnostics.clear()
+    }
+    if (configuration.get('linting.badness.enabled')) {
+        linters.push(badness)
+    } else {
+        badness.linterDiagnostics.clear()
     }
     return linters
 }

@@ -3,6 +3,7 @@ import { lw } from '../lw'
 import { LaTeXFormatter } from '../types'
 import { latexindent } from './latex-formatter/latexindent'
 import { texfmt } from './latex-formatter/tex-fmt'
+import { badness } from './latex-formatter/badness'
 import { fixQuotes, applyQuoteFixer } from '../extras/quote-fixer'
 import { fixMath, applyMathFixer } from '../extras/math-fixer'
 
@@ -21,6 +22,8 @@ class FormattingProvider implements vscode.DocumentFormattingEditProvider, vscod
             return latexindent
         } else if (program === 'tex-fmt') {
             return texfmt
+        } else if (program === 'badness') {
+            return badness
         } else if (program === 'none') {
             errorMsg = 'Please set your LaTeX formatter in `latex-workshop.formatting.latex`.'
         } else {
