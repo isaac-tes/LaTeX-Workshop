@@ -130,7 +130,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             '/tmp/main.tex',
             '-'
         ])
-        assert.deepStrictEqual(spawnStub.firstCall.args[2], { cwd: '/tmp' })
+        assert.deepStrictEqual(spawnStub.firstCall.args[2], { cwd: path.dirname(document.uri.fsPath) })
         assert.deepStrictEqual(proc.stdinWrites, ['\\bf important'])
 
         const diagnostics = badness.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))
