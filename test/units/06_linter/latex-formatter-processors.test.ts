@@ -130,17 +130,17 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const editorStub = mock.activeTextEditor('/tmp/project/main.tex', document.content)
             activeStubs.push(editorStub)
             ;(vscode.window.activeTextEditor as TextEditor).options = { insertSpaces: true, tabSize: 2 }
-            const process = makeProcess()
-            spawnStub?.returns(process)
+            const worker = makeProcess()
+            spawnStub?.returns(worker)
 
             const pending = latexindent.formatDocument(document)
             await tick()
-            process.stdoutEmitter.emit('data', Buffer.from('formatted'))
-            process.stderrEmitter.emit('data', 'diagnostic')
-            process.emit('close', 0)
+            worker.stdoutEmitter.emit('data', Buffer.from('formatted'))
+            worker.stderrEmitter.emit('data', 'diagnostic')
+            worker.emit('close', 0)
             const edit = await pending
 
-            assert.strictEqual(chmodStub.callCount, 1)
+            assert.strictEqual(chmodStub.callCount, globalThis.process.platform === 'win32' ? 0 : 1)
             assert.strictEqual(writeStub.firstCall.args[1], document.content)
             assert.ok((spawnStub!.firstCall.args[1] as string[]).some(arg => arg.includes('__latexindent_temp_main.tex')))
             assert.ok((spawnStub!.firstCall.args[1] as string[]).some(arg => arg.includes('  ')))

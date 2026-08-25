@@ -220,12 +220,14 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             '  | |'
         ].join('\n'))
 
-        const diagnostics = badness.linterDiagnostics.get(vscode.Uri.file('/tmp/sub/main.tex'))
-        assert.strictEqual(diagnostics?.length, 1)
-        assert.strictEqual(diagnostics?.[0].severity, vscode.DiagnosticSeverity.Information)
-        assert.strictEqual(diagnostics?.[0].code, 'badness')
-        assert.strictEqual(diagnostics?.[0].range.start.line, 0)
-        assert.strictEqual(diagnostics?.[0].range.start.character, 0)
+        const diagnostics: vscode.Diagnostic[] = []
+        badness.linterDiagnostics.forEach((_uri, currentDiagnostics) => diagnostics.push(...currentDiagnostics))
+
+        assert.strictEqual(diagnostics.length, 1)
+        assert.strictEqual(diagnostics[0].severity, vscode.DiagnosticSeverity.Information)
+        assert.strictEqual(diagnostics[0].code, 'badness')
+        assert.strictEqual(diagnostics[0].range.start.line, 0)
+        assert.strictEqual(diagnostics[0].range.start.character, 0)
     })
 
     it('should fall back from the root file to the root directory and current directory', async () => {
