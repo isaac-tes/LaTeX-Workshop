@@ -2028,6 +2028,12 @@
           "default": false,
           "markdownDescription": "Enable linting LaTeX with `lacheck`. Check `#latex-workshop.linting.run#` to control when `lacheck` is executed if this config is set to `true."
         },
+        "latex-workshop.linting.badness.enabled": {
+          "scope": "resource",
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Enable linting LaTeX with `badness`. Check `#latex-workshop.linting.run#` to control when `badness` is executed if this config is set to `true`."
+        },
         "latex-workshop.linting.run": {
           "scope": "resource",
           "type": "string",
@@ -2086,6 +2092,21 @@
           "type": "string",
           "default": "lacheck",
           "markdownDescription": "Define the location of LaCheck executive file."
+        },
+        "latex-workshop.linting.badness.exec.path": {
+          "scope": "window",
+          "type": "string",
+          "default": "badness",
+          "markdownDescription": "Define the location of the badness executable file."
+        },
+        "latex-workshop.linting.badness.exec.args": {
+          "scope": "resource",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "markdownDescription": "Define additional command line arguments for `badness lint`. The extension adds the input path, or `--stdin-filepath` and `-` for the current document. Project rule selection should normally be configured in `badness.toml`."
         },
         "latex-workshop.check.duplicatedLabels.enabled": {
           "scope": "window",
