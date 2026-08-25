@@ -192,20 +192,31 @@ export function registerKeyBind() {
 
     // #4936 A strange bug prevents CTRL/CMD+A from working in input box
     window.addEventListener('keydown', (evt: KeyboardEvent) => {
-        if ((evt.target as HTMLElement).nodeName === 'INPUT' &&
-            ((evt.ctrlKey || evt.metaKey) && evt.key === 'a')) {
-            (evt.target as HTMLInputElement).select()
+        const hasMeta = evt.ctrlKey || evt.metaKey
+        if (hasMeta && evt.keyCode === 86 || evt.shiftKey && evt.keyCode === 45) {
+            // Ctrl+V or Shift+Insert
+            document.execCommand('paste')
+        } else if (hasMeta && evt.keyCode === 67) {
+            // Ctrl+C
+            document.execCommand('copy')
+        } else if (hasMeta && evt.keyCode === 88) {
+            // Ctrl+X
+            document.execCommand('cut')
+        } else if (hasMeta && evt.keyCode === 65) {
+            // Ctrl+A
+            document.execCommand('selectAll')
+            // Ctrl+X
+        } else if (hasMeta && evt.keyCode === 90) {
+            document.execCommand('undo')
+        } else {
+            return
         }
+        // If we didn't return above, we triggered a command and want to suppress
+        // browser handling.
+        evt.preventDefault()
     })
 
     window.addEventListener('keydown', (evt: KeyboardEvent) => {
-        if (evt.key === 'c' && (evt.ctrlKey || evt.metaKey)) {
-            const selection = window.getSelection()
-            if (selection !== null && selection.toString().length > 0) {
-                void send({ type: 'copy', content: selection.toString(), isMetaKey: evt.metaKey })
-            }
-        }
-
         // Chrome's usual Alt-Left/Right (Command-Left/Right on OSX) for history
         // Back/Forward don't work in the embedded viewer, so we simulate them.
         if (navigator.userAgent.includes('Mac OS') ? evt.metaKey : evt.altKey) {
