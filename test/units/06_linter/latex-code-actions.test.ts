@@ -49,7 +49,12 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             diagnostics[3].source = 'Other'
             diagnostics[3].code = 2
 
-            const actions = provider.provideCodeActions(doc, range(0, 1), { diagnostics } as unknown as vscode.CodeActionContext, {} as vscode.CancellationToken)
+            const context = {
+                diagnostics,
+                triggerKind: vscode.CodeActionTriggerKind.Invoke,
+                only: undefined
+            } satisfies vscode.CodeActionContext
+            const actions = provider.provideCodeActions(doc, range(0, 1), context, new vscode.CancellationTokenSource().token)
 
             assert.strictEqual(actions.length, 2)
             assert.strictEqual(actions[0].title, 'Convert to non-breaking space (~)')
@@ -64,8 +69,12 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.deepStrictEqual(provider.provideCodeActions(
                 document('text'),
                 range(0, 1),
-                { diagnostics: [diagnostic] } as unknown as vscode.CodeActionContext,
-                {} as vscode.CancellationToken
+                {
+                    diagnostics: [diagnostic],
+                    triggerKind: vscode.CodeActionTriggerKind.Invoke,
+                    only: undefined
+                } satisfies vscode.CodeActionContext,
+                new vscode.CancellationTokenSource().token
             ), [])
         })
     })
@@ -221,6 +230,8 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
 
         it('should tolerate an unavailable whitespace match', () => {
+            // The test intentionally replaces the unbound prototype method.
+            // eslint-disable-next-line @typescript-eslint/unbound-method
             const originalExec = RegExp.prototype.exec
             const execStub = sinon.stub(RegExp.prototype, 'exec').callsFake(function (this: RegExp, text: string) {
                 if (this.source === '\\s*$') {

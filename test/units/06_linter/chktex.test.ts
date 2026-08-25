@@ -8,6 +8,7 @@ import { lw } from '../../../src/lw'
 import { chkTeX } from '../../../src/lint/latex-linter/chktex'
 import * as convertFilename from '../../../src/utils/convertfilename'
 
+/* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/naming-convention */
 function loadChkTeXWithPlatform(platform: string): typeof chkTeX {
     const nodeModule = require('module') as {
         _load: (request: string, parent: NodeModule, isMain: boolean) => unknown
@@ -29,6 +30,7 @@ function loadChkTeXWithPlatform(platform: string): typeof chkTeX {
         }
     }
 }
+/* eslint-enable @typescript-eslint/no-require-imports, @typescript-eslint/naming-convention */
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     before(() => {

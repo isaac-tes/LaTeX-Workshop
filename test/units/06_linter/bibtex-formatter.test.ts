@@ -393,14 +393,14 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
 
         it('should sort by calendar month and put missing fields before named fields', () => {
-            const entries = parseEntries(`@article{mar,\n  month = mar\n}\n@article{jan,\n  month = jan\n}\n@article{missing,\n  title = {No month}\n}\n`)
+            const entries = parseEntries('@article{mar,\n  month = mar\n}\n@article{jan,\n  month = jan\n}\n@article{missing,\n  title = {No month}\n}\n')
             const sorted = [...entries].sort(bibtexSort(new Set(), makeSortConfig({ sort: ['month'] })))
 
             assert.deepStrictEqual(sorted.map(entry => entry.internalKey), ['missing', 'jan', 'mar'])
         })
 
         it('should compare first entries by their configured order and treat equal entries as duplicates', () => {
-            const entries = parseEntries(`@book{book,\n  title = {Book}\n}\n@article{article,\n  title = {Article}\n}\n`)
+            const entries = parseEntries('@book{book,\n  title = {Book}\n}\n@article{article,\n  title = {Article}\n}\n')
             const sort = bibtexSort(new Set(), makeSortConfig({ sort: [], firstEntries: ['book', 'article'] }))
 
             assert.ok(sort(entries[1], entries[0]) > 0)
@@ -408,7 +408,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         })
 
         it('should put a configured first entry before an entry of another type in either comparator direction', () => {
-            const entries = parseEntries(`@article{article,\n  title = {Article}\n}\n@book{book,\n  title = {Book}\n}\n`)
+            const entries = parseEntries('@article{article,\n  title = {Article}\n}\n@book{book,\n  title = {Book}\n}\n')
             const sort = bibtexSort(new Set(), makeSortConfig({ sort: [], firstEntries: ['book'] }))
 
             assert.strictEqual(sort(entries[0], entries[1]), 1)

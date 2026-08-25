@@ -7,6 +7,7 @@ import { assert, mock, set, TextDocument, TextEditor } from '../utils'
 import { lw } from '../../../src/lw'
 import { texfmt } from '../../../src/lint/latex-formatter/tex-fmt'
 
+/* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/naming-convention */
 type Latexindent = typeof import('../../../src/lint/latex-formatter/latexindent').latexindent
 type FakeFs = {
     __esModule: true,
@@ -43,6 +44,7 @@ function loadLatexindent(fakeFs: FakeFs, platform = 'darwin'): Latexindent {
         }
     }
 }
+/* eslint-enable @typescript-eslint/no-require-imports, @typescript-eslint/naming-convention */
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     before(() => {
@@ -165,7 +167,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             assert.strictEqual((await pending)?.newText, 'formatted')
             assert.strictEqual(chmodStub.callCount, 0)
-            assert.ok(spawnStub!.firstCall.args[0].endsWith('latexindent.bat'))
+            assert.ok(String(spawnStub!.firstCall.args[0]).endsWith('latexindent.bat'))
         })
 
         it('should retry latexindent with the platform extension after the first path check fails', async () => {

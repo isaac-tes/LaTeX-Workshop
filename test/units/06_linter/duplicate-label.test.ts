@@ -34,7 +34,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
     it('should do nothing when duplicate-label checking is disabled', () => {
         set.config('check.duplicatedLabels.enabled', false)
-        const includedStub = lw.cache.getIncludedTeX as sinon.SinonStub
+        const includedStub = lw.cache['getIncludedTeX'] as sinon.SinonStub
         includedStub.resetHistory()
 
         dupLabelDetector.check()
