@@ -164,6 +164,14 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 			assert.strictEqual(laCheck.linterDiagnostics.get(vscode.Uri.file(path.resolve('/workspace/project', 'sub/s.tex')))?.length, 1)
 		})
 
+		it('should resolve paths from the current directory when neither file path nor root is set', async () => {
+			lw.root.file.path = undefined
+
+			await laCheck.parseLog('"main.tex", line 4: warning\n')
+
+			assert.strictEqual(laCheck.linterDiagnostics.get(vscode.Uri.file(path.resolve('.', 'main.tex')))?.length, 1)
+		})
+
 		it('should report diagnostics only on supported file extensions', async () => {
 			const log = [
 				'"main.tex", line 1: tex warning',

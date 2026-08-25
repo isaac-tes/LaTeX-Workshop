@@ -402,5 +402,16 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
                 stderr: 'stderr output'
             })
         })
+
+        it('should reject with an empty stderr message when the process exits without stderr', async () => {
+            const proc = createFakeProcess()
+            const promise = processWrapper('LaCheck', proc)
+            proc.triggerExit(1)
+
+            await assert.rejects(promise, error => {
+                const result = error as { exitCode: number, stdout: string, stderr: string }
+                return result.exitCode === 1 && result.stdout === '' && result.stderr === ''
+            })
+        })
     })
 })

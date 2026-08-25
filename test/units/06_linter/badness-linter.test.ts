@@ -196,4 +196,141 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         assert.strictEqual(badness.linterDiagnostics.get(uri)?.length, 1)
         assert.strictEqual(badness.linterDiagnostics.get(uri)?.[0].message, 'old')
     })
+
+    it('should return without publishing when spawning the root linter throws', async () => {
+        spawnStub.throws(new Error('spawn failed'))
+
+        await badness.lintRootFile('/tmp/main.tex')
+
+        assert.strictEqual(badness.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))?.length, 0)
+    })
+
+    it('should return without publishing when spawning the active-file linter throws', async () => {
+        spawnStub.throws(new Error('spawn failed'))
+
+        await badness.lintFile(new TextDocument('/tmp/main.tex', 'broken', {}))
+
+        assert.strictEqual(badness.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))?.length, 0)
+    })
+
+    it('should parse logs supplied through the public parseLog method', async () => {
+        await badness.parseLog([
+            'info:',
+            ' --> sub/main.tex:0:0',
+            '  | |'
+        ].join('\n'))
+
+        const diagnostics = badness.linterDiagnostics.get(vscode.Uri.file('/tmp/sub/main.tex'))
+        assert.strictEqual(diagnostics?.length, 1)
+        assert.strictEqual(diagnostics?.[0].severity, vscode.DiagnosticSeverity.Information)
+        assert.strictEqual(diagnostics?.[0].code, 'badness')
+        assert.strictEqual(diagnostics?.[0].range.start.line, 0)
+        assert.strictEqual(diagnostics?.[0].range.start.character, 0)
+    })
+
+    it('should fall back from the root file to the root directory and current directory', async () => {
+        const originalRootFile = lw.root.file.path
+        const originalRootDir = lw.root.dir.path
+        try {
+            lw.root.file.path = undefined
+            lw.root.dir.path = '/tmp'
+            await badness.parseLog('')
+
+            lw.root.dir.path = undefined
+            await badness.parseLog('')
+        } finally {
+            lw.root.file.path = originalRootFile
+            lw.root.dir.path = originalRootDir
+        }
+    })
+
+    it('should use default text and length when the marker line is malformed', () => {
+        const entries = parseBadnessLog([
+            'note: note-code',
+            ' --> relative.tex:2:3',
+            'not a marker',
+            'warning:',
+            ' --> relative.tex:4:5',
+            '  | ???'
+        ].join('\n'), { baseDir: '/tmp' })
+
+        assert.strictEqual(entries.length, 2)
+        assert.strictEqual(entries[0].severity, vscode.DiagnosticSeverity.Information)
+        assert.strictEqual(entries[0].length, 1)
+        assert.strictEqual(entries[0].text, 'note-code')
+        assert.strictEqual(entries[1].code, 'badness')
+        assert.strictEqual(entries[1].text, 'badness')
+    })
+
+    it('should skip a diagnostic header without a valid location line', () => {
+        assert.deepStrictEqual(parseBadnessLog('warning: missing-location\nnot a location'), [])
+    })
+
+    it('should handle Buffer output and ignore a second process completion', async () => {
+        const process = makeFakeProcess('')
+        spawnStub.callsFake(() => {
+            setImmediate(() => {
+                process.stdout?.emit('data', Buffer.from(''))
+                process.emit('exit', 0)
+                process.emit('exit', 1)
+            })
+            return process
+        })
+
+        await badness.lintRootFile('/tmp/main.tex')
+
+        assert.strictEqual(badness.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))?.length, 0)
+    })
+
+    it('should convert a process error into an unsuccessful result', async () => {
+        const process = makeFakeProcess('')
+        spawnStub.callsFake(() => {
+            setImmediate(() => process.emit('error', new Error('process error')))
+            return process
+        })
+
+        await badness.lintRootFile('/tmp/main.tex')
+
+        assert.hasLog('failed to spawn command')
+    })
+
+    it('should handle an active-file process without stdin', async () => {
+        const process = makeFakeProcess('')
+        process.stdin = null
+        spawnStub.returns(process)
+
+        await badness.lintFile(new TextDocument('/tmp/main.tex', 'content', {}))
+
+        assert.strictEqual(badness.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))?.length, 0)
+    })
+
+    it('should kill a previous linter process before starting another one', async () => {
+        const first = makeFakeProcess('')
+        const second = makeFakeProcess('')
+        spawnStub.onFirstCall().returns(first)
+        spawnStub.onSecondCall().returns(second)
+
+        const firstPending = badness.lintRootFile('/tmp/main.tex')
+        await new Promise(resolve => setImmediate(resolve))
+        const secondPending = badness.lintRootFile('/tmp/main.tex')
+        await new Promise(resolve => setImmediate(resolve))
+
+        second.trigger()
+        await secondPending
+        first.trigger()
+        await firstPending
+
+        assert.strictEqual((first.kill as unknown as sinon.SinonStub).callCount, 1)
+    })
+
+    it('should treat a null process exit code as an unsuccessful result', async () => {
+        const process = makeFakeProcess('')
+        spawnStub.returns(process)
+        const pending = badness.lintRootFile('/tmp/main.tex')
+        await new Promise(resolve => setImmediate(resolve))
+        process.emit('exit', null)
+
+        await pending
+        assert.strictEqual(badness.linterDiagnostics.get(vscode.Uri.file('/tmp/main.tex'))?.length, 0)
+    })
 })

@@ -6,6 +6,29 @@ import * as sinon from 'sinon'
 import { assert, mock, set, TextDocument } from '../utils'
 import { lw } from '../../../src/lw'
 import { chkTeX } from '../../../src/lint/latex-linter/chktex'
+import * as convertFilename from '../../../src/utils/convertfilename'
+
+function loadChkTeXWithPlatform(platform: string): typeof chkTeX {
+    const nodeModule = require('module') as {
+        _load: (request: string, parent: NodeModule, isMain: boolean) => unknown
+    }
+    const originalLoad = nodeModule._load
+    const modulePath = require.resolve('../../../src/lint/latex-linter/chktex')
+    const cachedModule = require.cache[modulePath]
+    delete require.cache[modulePath]
+    nodeModule._load = (request, parent, isMain) => request === 'os'
+        ? { __esModule: true, platform: () => platform }
+        : originalLoad(request, parent, isMain)
+    try {
+        return (require(modulePath) as { chkTeX: typeof chkTeX }).chkTeX
+    } finally {
+        nodeModule._load = originalLoad
+        delete require.cache[modulePath]
+        if (cachedModule) {
+            require.cache[modulePath] = cachedModule
+        }
+    }
+}
 
 describe(path.basename(__filename).split('.')[0] + ':', () => {
     before(() => {
@@ -527,6 +550,23 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             // No -l flag should be added if rc path lookup fails (no root)
             assert.ok(!args.includes('-l'))
         })
+
+        it('should use the workspace .chktexrc when the root directory has none', async () => {
+            const workspaceRc = path.resolve(vscode.workspace.workspaceFolders?.[0].uri.fsPath ?? '', '.chktexrc')
+            const checked: string[] = []
+            fileExistsStub.callsFake((p: string | vscode.Uri) => {
+                const filePath = typeof p === 'string' ? p : p.fsPath
+                checked.push(filePath)
+                return Promise.resolve(filePath === workspaceRc ? fileStat : false)
+            })
+            proc.triggerExit()
+
+            await chkTeX.lintRootFile('/tmp/main.tex')
+
+            assert.ok(checked.includes(workspaceRc))
+            const args = spawnStub.firstCall.args[1] as readonly string[]
+            assert.ok(args.includes(workspaceRc))
+        })
     })
 
     describe('chkTeX.globalRcPath', () => {
@@ -563,6 +603,36 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.ok(existsCalls.some(p => p.includes('/home/testuser/.chktexrc')))
         })
 
+        it('should inspect LOGDIR and CHKTEXRC and return the first existing non-Windows rc file', async () => {
+            if (process.platform === 'win32') { return }
+            const oldValues = {
+                HOME: process.env.HOME,
+                LOGDIR: process.env.LOGDIR,
+                CHKTEXRC: process.env.CHKTEXRC
+            }
+            process.env.HOME = undefined
+            process.env.LOGDIR = '/tmp/logdir'
+            process.env.CHKTEXRC = '/tmp/chktexrc'
+            const expected = path.join('/tmp/chktexrc', '.chktexrc')
+            const existsCalls: string[] = []
+            fileExistsStub.callsFake((p: string | vscode.Uri) => {
+                const pathStr = typeof p === 'string' ? p : p.fsPath
+                existsCalls.push(pathStr)
+                return Promise.resolve(pathStr === expected)
+            })
+            try {
+                proc.triggerExit()
+                await chkTeX.lintRootFile('/tmp/main.tex')
+            } finally {
+                process.env.HOME = oldValues.HOME
+                process.env.LOGDIR = oldValues.LOGDIR
+                process.env.CHKTEXRC = oldValues.CHKTEXRC
+            }
+
+            assert.ok(existsCalls.includes(path.join('/tmp/logdir', '.chktexrc')))
+            assert.ok(existsCalls.includes(path.join('/tmp/chktexrc', '.chktexrc')))
+        })
+
         it('should check CHKTEXRC/chktexrc on Windows when CHKTEXRC is set', async () => {
             if (process.platform !== 'win32') { return }
             const originalChktexrc = process.env.CHKTEXRC
@@ -580,6 +650,35 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             process.env.CHKTEXRC = originalChktexrc
 
             assert.ok(existsCalls.some(p => p.includes('chktexrc')))
+        })
+
+        it('should inspect all Windows global chktexrc environment locations', async () => {
+            const windowsChkTeX = loadChkTeXWithPlatform('win32')
+            const oldValues = {
+                CHKTEXRC: process.env.CHKTEXRC,
+                CHKTEX_HOME: process.env.CHKTEX_HOME,
+                EMTEXDIR: process.env.EMTEXDIR
+            }
+            process.env.CHKTEXRC = '/tmp/chktexrc'
+            process.env.CHKTEX_HOME = '/tmp/chktex-home'
+            process.env.EMTEXDIR = '/tmp/emtex'
+            const existsCalls: string[] = []
+            fileExistsStub.callsFake((p: string | vscode.Uri) => {
+                existsCalls.push(typeof p === 'string' ? p : p.fsPath)
+                return Promise.resolve(false)
+            })
+            try {
+                proc.triggerExit()
+                await windowsChkTeX.lintRootFile('/tmp/main.tex')
+            } finally {
+                process.env.CHKTEXRC = oldValues.CHKTEXRC
+                process.env.CHKTEX_HOME = oldValues.CHKTEX_HOME
+                process.env.EMTEXDIR = oldValues.EMTEXDIR
+            }
+
+            assert.ok(existsCalls.includes(path.join('/tmp/chktexrc', 'chktexrc')))
+            assert.ok(existsCalls.includes(path.join('/tmp/chktex-home', 'chktexrc')))
+            assert.ok(existsCalls.includes(path.join('/tmp/emtex', 'data', 'chktexrc')))
         })
     })
 
@@ -718,6 +817,18 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             assert.ok(diags !== undefined)
             assert.hasLog('Column number not converted by invalid line')
         })
+
+        it('should keep the raw column when the source file cannot be read', async () => {
+            fileExistsStub.callsFake((p: string | vscode.Uri) => {
+                const pathStr = typeof p === 'string' ? p : p.fsPath
+                return Promise.resolve(pathStr === '/tmp/main.tex' ? fileStat : false)
+            })
+            fileReadStub.resolves(undefined)
+
+            await chkTeX.parseLog('/tmp/main.tex:1:4:1:Warning:24:Some warning.\n', '/tmp/main.tex')
+
+            assert.hasLog('Column number not converted on unreadable')
+        })
     })
 
     describe('chkTeX.showLinterDiagnostics', () => {
@@ -729,6 +840,19 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
 
             // Should attempt to set diagnostics without throwing
             assert.ok(true)
+        })
+
+        it('should publish diagnostics under the converted filename when conversion succeeds', async () => {
+            set.config('message.convertFilenameEncoding', true)
+            const convertStub = sinon.stub(convertFilename, 'convertFilenameEncoding').resolves('/tmp/converted.tex')
+            try {
+                await chkTeX.parseLog('/tmp/missing.tex:5:1:1:Warning:24:Some warning.\n')
+            } finally {
+                convertStub.restore()
+            }
+
+            assert.strictEqual(chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/converted.tex'))?.length, 1)
+            assert.strictEqual(chkTeX.linterDiagnostics.get(vscode.Uri.file('/tmp/missing.tex'))?.length, 0)
         })
 
         it('should aggregate multiple diagnostics for the same file', async () => {

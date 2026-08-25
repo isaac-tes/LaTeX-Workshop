@@ -391,6 +391,83 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             ;[...es].sort(bibtexSort(duplicates, config))
             assert.strictEqual(duplicates.size, 0)
         })
+
+        it('should sort by calendar month and put missing fields before named fields', () => {
+            const entries = parseEntries(`@article{mar,\n  month = mar\n}\n@article{jan,\n  month = jan\n}\n@article{missing,\n  title = {No month}\n}\n`)
+            const sorted = [...entries].sort(bibtexSort(new Set(), makeSortConfig({ sort: ['month'] })))
+
+            assert.deepStrictEqual(sorted.map(entry => entry.internalKey), ['missing', 'jan', 'mar'])
+        })
+
+        it('should compare first entries by their configured order and treat equal entries as duplicates', () => {
+            const entries = parseEntries(`@book{book,\n  title = {Book}\n}\n@article{article,\n  title = {Article}\n}\n`)
+            const sort = bibtexSort(new Set(), makeSortConfig({ sort: [], firstEntries: ['book', 'article'] }))
+
+            assert.ok(sort(entries[1], entries[0]) > 0)
+            assert.strictEqual(sort(entries[0], entries[0]), 0)
+        })
+
+        it('should put a configured first entry before an entry of another type in either comparator direction', () => {
+            const entries = parseEntries(`@article{article,\n  title = {Article}\n}\n@book{book,\n  title = {Book}\n}\n`)
+            const sort = bibtexSort(new Set(), makeSortConfig({ sort: [], firstEntries: ['book'] }))
+
+            assert.strictEqual(sort(entries[0], entries[1]), 1)
+            assert.strictEqual(sort(entries[1], entries[0]), -1)
+        })
+
+        it('should order entries without keys before keyed entries', () => {
+            const stringEntry = bibtexParser.parse('@string{journal = "Journal"}\n').content[0] as bibtexParser.StringEntry
+            const entry = parseEntries('@article{key,\n  title = {Title}\n}\n')[0]
+            const sort = bibtexSort(new Set(), makeSortConfig({ sort: ['key'] }))
+
+            assert.strictEqual(sort(stringEntry, stringEntry), 0)
+            assert.ok(sort(stringEntry, entry) < 0)
+            assert.ok(sort(entry, stringEntry) > 0)
+        })
+    })
+
+    describe('bibtex-formatter field values', () => {
+        function makeEntry(text: string): bibtexParser.Entry {
+            return bibtexParser.parse(text).content[0] as bibtexParser.Entry
+        }
+
+        it('should indent later lines of a multiline text field', () => {
+            set.config('bibtex-format.align-equal.enabled', true)
+            const entry = makeEntry('@article{multi,\n  title = {first line\n    second line}\n}\n')
+
+            const formatted = bibtexFormat(entry, defaultConfig())
+
+            assert.match(formatted, /first line\n\s+second line/)
+        })
+
+        it('should format concatenated field values', () => {
+            const entry = makeEntry('@article{concat,\n  title = hello # {world}\n}\n')
+
+            assert.match(bibtexFormat(entry, defaultConfig()), /hello # \{world\}/)
+        })
+
+        it('should return an empty string for an unsupported field value kind', () => {
+            const entry = {
+                entryType: 'article',
+                internalKey: 'unknown',
+                content: [{
+                    name: 'title',
+                    value: { kind: 'unsupported', content: 'ignored' }
+                }]
+            } as unknown as bibtexParser.Entry
+
+            assert.match(bibtexFormat(entry, defaultConfig()), /title = $/m)
+        })
+
+        it('should use an empty key when an entry does not have an internal key', () => {
+            const entry = {
+                entryType: 'article',
+                internalKey: undefined,
+                content: []
+            } as unknown as bibtexParser.Entry
+
+            assert.match(bibtexFormat(entry, defaultConfig()), /^@article\{/)
+        })
     })
 
     describe('bibtex-formatter.format', () => {
@@ -432,6 +509,40 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             await format(false, true)
             bibStub.restore()
         })
+
+        it('should apply a non-sorting edit and publish duplicate diagnostics after a successful edit', async () => {
+            activeEditorStub = mock.activeTextEditor('/tmp/test.bib', BASE_BIB, { languageId: 'bibtex' })
+            const applyEditStub = sinon.stub(vscode.workspace, 'applyEdit').resolves(true)
+
+            await format(false, false)
+            await new Promise(resolve => setImmediate(resolve))
+
+            assert.strictEqual(applyEditStub.callCount, 1)
+            applyEditStub.restore()
+        })
+
+        it('should report an error when applying a BibTeX edit fails', async () => {
+            activeEditorStub = mock.activeTextEditor('/tmp/test.bib', BASE_BIB, { languageId: 'bibtex' })
+            const applyEditStub = sinon.stub(vscode.workspace, 'applyEdit').resolves(false)
+
+            await format(false, false)
+            await new Promise(resolve => setImmediate(resolve))
+
+            assert.strictEqual(applyEditStub.callCount, 1)
+            applyEditStub.restore()
+        })
+
+        it('should highlight duplicate entries after a successful sorted edit', async () => {
+            activeEditorStub = mock.activeTextEditor('/tmp/test.bib', DUP_BIB, { languageId: 'bibtex' })
+            set.config('bibtex-format.handleDuplicates', 'Highlight Duplicates')
+            const applyEditStub = sinon.stub(vscode.workspace, 'applyEdit').resolves(true)
+
+            await format(true, false)
+            await new Promise(resolve => setImmediate(resolve))
+
+            assert.strictEqual(applyEditStub.callCount, 1)
+            applyEditStub.restore()
+        })
     })
 
     describe('FormattingProvider.provideDocumentFormattingEdits', () => {
@@ -450,6 +561,12 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
             const edits = await formatDocument(makeBibDocument())
 
             bibStub.restore()
+            assert.deepStrictEqual(edits, [])
+        })
+
+        it('should ignore AST items that are neither entries nor string entries', async () => {
+            const edits = await formatDocument(makeBibDocument('@preamble{"not an entry"}\n'))
+
             assert.deepStrictEqual(edits, [])
         })
 

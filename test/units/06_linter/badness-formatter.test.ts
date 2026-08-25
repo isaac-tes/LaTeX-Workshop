@@ -23,7 +23,7 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         stdinEnd: sinon.SinonStub
     }
 
-    function makeFakeProcess(stdout: string, exitCode: number = 0, stderr: string = '', error?: Error): FakeProcess {
+    function makeFakeProcess(stdout: string | Buffer, exitCode: number = 0, stderr: string | Buffer = '', error?: Error): FakeProcess {
         const emitter = new EventEmitter()
         const stdoutEmitter = new EventEmitter()
         const stderrEmitter = new EventEmitter()
@@ -109,9 +109,42 @@ describe(path.basename(__filename).split('.')[0] + ':', () => {
         assert.strictEqual(edit?.newText, 'formatted second')
     })
 
+    it('should use the document as root fallback and default missing arguments', async () => {
+        lw.root.file.path = undefined
+        set.config('formatting.badness.args', undefined)
+        const document = makeDocument('/tmp/main.tex', 'content')
+        const process = makeFakeProcess('formatted')
+        spawnStub.returns(process)
+
+        await badness.formatDocument(document)
+
+        assert.deepStrictEqual(spawnStub.firstCall.args[1], [
+            'format',
+            '--stdin-filepath',
+            document.fileName,
+            '-'
+        ])
+    })
+
     it('should return no edit when badness exits with an error', async () => {
         const document = makeDocument('/tmp/main.tex', '\\badcommand')
         const process = makeFakeProcess('', 2, 'parse error')
+        spawnStub.returns(process)
+
+        assert.strictEqual(await badness.formatDocument(document), undefined)
+    })
+
+    it('should log formatter stdout as well as stderr on a nonzero exit', async () => {
+        const document = makeDocument('/tmp/main.tex', '\\badcommand')
+        const process = makeFakeProcess('partial output', 2, 'parse error')
+        spawnStub.returns(process)
+
+        assert.strictEqual(await badness.formatDocument(document), undefined)
+    })
+
+    it('should collect Buffer stdout and stderr chunks', async () => {
+        const document = makeDocument('/tmp/main.tex', '\\badcommand')
+        const process = makeFakeProcess(Buffer.from('partial output'), 2, Buffer.from('parse error'))
         spawnStub.returns(process)
 
         assert.strictEqual(await badness.formatDocument(document), undefined)
