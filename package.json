@@ -3028,7 +3028,7 @@
   "scripts": {
     "clean": "rimraf out/ .eslintcache",
     "compile": "tsc -p tsconfig.json && tsc -p viewer/tsconfig.json",
-    "coverage": "c8 --check-coverage npm run test --src out/src/",
+    "coverage": "c8 --check-coverage --src out/src/ npm run test",
     "lint": "eslint --cache .",
     "lint:fix": "eslint --fix --cache .",
     "release": "npm run clean && npm run lint && npm run compile && vsce package",
@@ -3072,7 +3072,7 @@
     "@unified-latex/unified-latex-util-to-string": "1.8.4",
     "@vscode/test-electron": "^2.5.2",
     "@vscode/vsce": "^3.9.1",
-    "c8": "^11.0.0",
+    "c8": "^12.0.0",
     "esbuild": "^0.28.1",
     "eslint": "^10.4.0",
     "globals": "^17.6.0",
